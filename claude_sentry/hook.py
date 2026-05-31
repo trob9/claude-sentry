@@ -1,9 +1,15 @@
 """claude-sentry: hook that logs tool invocations to events.jsonl.
 
 Reads the hook JSON payload from stdin and appends one event per call:
-  {"ts": iso8601, "type": "edit"|"skill"|"agent", "target": str, "session_id": str, "cwd": str}
+  {"ts": iso8601, "type": "edit"|"skill"|"agent"|"tool", "target": str, ...}
 
-Designed to be cheap and fail-silent: never blocks the parent tool call.
+Handles two hook events:
+  * PostToolUse      — every tool call (edits, deletions, Skill/Agent, tallies)
+  * UserPromptSubmit — a user-typed `/slash-command`, logged as a skill so it
+    shows up in the sidebar (these never go through the Skill *tool*, so they'd
+    otherwise be invisible).
+
+Designed to be cheap and fail-silent: never blocks the parent call.
 """
 from __future__ import annotations
 
@@ -129,16 +135,41 @@ def classify(tool_name: str, tool_input: dict, cwd: str) -> list[dict]:
     return []
 
 
+_SLASH_RE = re.compile(r"/([A-Za-z0-9][A-Za-z0-9_:-]*)")
+
+
+def parse_slash_command(prompt: str) -> str | None:
+    """Return the command name from a prompt that starts with `/name`, else None.
+    Ignores prompts that merely contain a slash mid-text (e.g. a file path)."""
+    if not prompt:
+        return None
+    stripped = prompt.lstrip()
+    if not stripped.startswith("/"):
+        return None
+    m = _SLASH_RE.match(stripped)
+    return m.group(1) if m else None
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
     except Exception:
         return 0
 
-    tool_name = payload.get("tool_name", "")
-    tool_input = payload.get("tool_input", {}) or {}
     session_id = payload.get("session_id", "")
     cwd = payload.get("cwd", "")
+    hook_event = payload.get("hook_event_name", "")
+
+    # UserPromptSubmit: capture a leading /slash-command as a skill event.
+    if hook_event == "UserPromptSubmit" or ("prompt" in payload and "tool_name" not in payload):
+        cmd = parse_slash_command(payload.get("prompt", "") or "")
+        if not cmd:
+            return 0
+        _append([{"type": "skill", "target": cmd}], session_id, cwd)
+        return 0
+
+    tool_name = payload.get("tool_name", "")
+    tool_input = payload.get("tool_input", {}) or {}
 
     events_ = classify(tool_name, tool_input, cwd)
     # Always log a tool-call event for per-session tool tallies
@@ -146,7 +177,11 @@ def main() -> int:
         events_.append({"type": "tool", "target": tool_name})
     if not events_:
         return 0
+    _append(events_, session_id, cwd)
+    return 0
 
+
+def _append(events_: list[dict], session_id: str, cwd: str) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
     try:
@@ -156,7 +191,6 @@ def main() -> int:
                 f.write(json.dumps(event, ensure_ascii=False) + "\n")
     except Exception:
         pass
-    return 0
 
 
 if __name__ == "__main__":

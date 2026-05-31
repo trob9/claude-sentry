@@ -110,6 +110,9 @@ This edits `~/.claude/settings.json` and adds:
 - **`PostToolUse`** hook (matcher `*`) → runs `claude-sentry-hook` after every
   tool call. This is what records edits, deletions, skill/agent/tool usage. It is
   **required** on every platform.
+- **`UserPromptSubmit`** hook (matcher `*`) → runs `claude-sentry-hook` on each
+  prompt you send, so a `/slash-command` you type is tracked too (those never go
+  through the Skill tool, so `PostToolUse` alone can't see them).
 - **`SessionStart`** hook (matcher `*`) → runs `claude-sentry-launch`.
   **Windows Terminal only.** It splits a 25%-wide sidebar pane on the right of
   your terminal automatically when a Claude session starts, already linked to

@@ -83,6 +83,10 @@ def install(with_launcher: bool) -> None:
     added: list[str] = []
     if _add_hook(hooks.setdefault("PostToolUse", []), POST_MATCHER, HOOK_CMD):
         added.append(f"PostToolUse[{POST_MATCHER}] → {HOOK_CMD}")
+    # UserPromptSubmit captures user-typed /slash-commands (they never reach the
+    # Skill tool, so PostToolUse alone can't see them).
+    if _add_hook(hooks.setdefault("UserPromptSubmit", []), "*", HOOK_CMD):
+        added.append(f"UserPromptSubmit[*] → {HOOK_CMD}")
     # Remove the legacy PreToolUse Skill|Task|Agent hook if a previous install
     # added it — it double-counts against PostToolUse[*].
     if "PreToolUse" in hooks and _remove_hook(hooks["PreToolUse"], PRE_MATCHER, HOOK_CMD):
@@ -106,6 +110,7 @@ def uninstall() -> None:
     removed: list[str] = []
     for ev, matcher, cmd in (
         ("PostToolUse", POST_MATCHER, HOOK_CMD),
+        ("UserPromptSubmit", "*", HOOK_CMD),
         ("PreToolUse", PRE_MATCHER, HOOK_CMD),
         ("SessionStart", "*", LAUNCH_CMD),
     ):
