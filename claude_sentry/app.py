@@ -1708,13 +1708,16 @@ class SentryApp(App):
             pass
 
     def _render_unconfirmed(self, evts: list[dict]) -> None:
-        """Review queue: every skill/agent name in the log that isn't backed by
-        a file and hasn't been confirmed or denied yet. Global across sessions —
-        it's a cleanup list, not a per-session view."""
+        """Review queue: skill/agent names *this session* used that aren't backed
+        by a file and aren't a known built-in, skipping ones already confirmed or
+        denied. Scoped to the current session like the other tabs (in global mode
+        it shows all). The confirm/deny decision it writes is still global."""
         seen: dict[tuple[str, str], int] = {}
         for e in evts:
             kind = e.get("type", "")
             if kind not in ("skill", "agent"):
+                continue
+            if self.session_id and e.get("session_id") != self.session_id:
                 continue
             name = e.get("target") or ""
             if not name:
