@@ -421,6 +421,56 @@ def find_skill_or_agent_file(kind: str, name: str) -> Path | None:
 
 
 # ---------------------------------------------------------------------------
+# Claude-native built-ins. These ship inside Claude Code (no file on disk), so
+# we recognise them out of the box instead of dumping them in the review queue.
+# Source: https://code.claude.com/docs/en/commands  (built-in commands +
+# bundled skills) and https://code.claude.com/docs/en/sub-agents (agents).
+
+NATIVE_COMMANDS = {
+    "add-dir", "agents", "allowed-tools", "android", "app", "background",
+    "bashes", "batch", "bg", "branch", "btw", "bug", "checkpoint", "chrome",
+    "clear", "code-review", "compact", "config", "context", "continue",
+    "cost", "debug", "desktop", "diff", "doctor", "effort", "exit",
+    "extra-usage", "feedback", "fewer-permission-prompts", "focus", "fork",
+    "heapdump", "help", "hooks", "ide", "init", "insights",
+    "install-github-app", "install-slack-app", "ios", "keybindings", "login",
+    "logout", "mcp", "memory", "mobile", "model", "new", "passes",
+    "permissions", "plan", "plugin", "powerup", "privacy-settings",
+    "proactive", "quit", "radio", "rc", "recap", "release-notes",
+    "reload-plugins", "reload-skills", "remote-control", "remote-env", "reset",
+    "resume", "review", "rewind", "routines", "run", "run-skill-generator",
+    "sandbox", "schedule", "scroll-speed", "security-review", "settings",
+    "setup-bedrock", "setup-vertex", "share", "simplify", "skills", "stats",
+    "status", "statusline", "stickers", "stop", "tasks", "team-onboarding",
+    "teleport", "terminal-setup", "theme", "tp", "ultrareview", "undo",
+    "upgrade", "usage", "usage-credits", "verify", "vim", "claude-api", "loop",
+    "deep-research", "fast", "goal", "workflows",
+}
+
+# Built-in subagent types Claude Code ships with (case-insensitive).
+NATIVE_AGENTS = {"general-purpose", "explore", "plan", "claude"}
+
+DOCS_COMMANDS = "https://code.claude.com/docs/en/commands"
+DOCS_AGENTS = "https://code.claude.com/docs/en/sub-agents"
+
+
+def is_native(kind: str, name: str) -> bool:
+    bare = name.split(":", 1)[-1]
+    if kind == "agent":
+        return bare.lower() in NATIVE_AGENTS
+    return bare in NATIVE_COMMANDS
+
+
+def native_doc_url(kind: str, name: str) -> str:
+    """A deep link to the Claude docs that highlights this command/agent."""
+    bare = name.split(":", 1)[-1]
+    if kind == "agent":
+        return DOCS_AGENTS
+    # Text fragment (#:~:text=) scrolls to and highlights the command on load.
+    return f"{DOCS_COMMANDS}#:~:text=%2F{bare}"
+
+
+# ---------------------------------------------------------------------------
 # Config (persists divider split)
 
 def load_config() -> dict:
@@ -736,6 +786,120 @@ class FileMenu(ModalScreen):
         self.dismiss()
 
 
+class NativeInfo(ModalScreen):
+    """Context menu for a Claude-native skill/agent (no file to open). Offers a
+    deep link to the Claude docs. Same look/feel as FileMenu."""
+
+    DEFAULT_CSS = """
+    NativeInfo { align: center middle; background: $surface 0%; }
+    NativeInfo > #wrap {
+        background: $panel;
+        border: round $accent;
+        padding: 0 1;
+        width: auto;
+        height: auto;
+    }
+    NativeInfo #titlebar { height: 1; width: 1fr; }
+    NativeInfo .name { width: 1fr; color: $text-muted; text-style: italic; }
+    NativeInfo #close {
+        width: 3; content-align: center middle; color: $text-muted;
+    }
+    NativeInfo #close:hover { color: $text; background: $error 60%; }
+    NativeInfo .item { width: 100%; height: 1; padding: 0 1; color: $text; }
+    NativeInfo .item.-selected { background: $accent; }
+    """
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Close", show=False),
+        Binding("up", "move(-1)", "Up", show=False),
+        Binding("down", "move(1)", "Down", show=False),
+        Binding("enter", "activate", "Select", show=False),
+    ]
+
+    def __init__(self, kind: str, name: str, url: str) -> None:
+        super().__init__()
+        self.item_kind = kind
+        self.item_name = name
+        self.url = url
+        self._item_ids = ["docs", "copy"]
+        self._sel = 0
+
+    @property
+    def _title(self) -> str:
+        return f"{self.item_name} · Claude native {self.item_kind}"
+
+    def compose(self) -> ComposeResult:
+        self._items = [("▸ View on Claude docs", "docs"),
+                       ("▸ Copy doc link", "copy")]
+        with Vertical(id="wrap"):
+            with Horizontal(id="titlebar"):
+                yield Static(self._title, classes="name")
+                yield Static("✕", id="close")
+            for label, iid in self._items:
+                yield Static(label, id=iid, classes="item")
+
+    def on_mount(self) -> None:
+        title_w = len(self._title) + 2  # + ✕ gap
+        rows_w = max(len(label) for label, _ in self._items)
+        content_w = max(rows_w, title_w)
+        self.query_one("#wrap").styles.width = content_w + 4
+        self._select(0)
+
+    def _select(self, index: int) -> None:
+        n = len(self._item_ids)
+        self._sel = index if (0 <= index < n) else -1
+        for i, iid in enumerate(self._item_ids):
+            try:
+                self.query_one(f"#{iid}", Static).set_class(i == self._sel, "-selected")
+            except Exception:
+                pass
+
+    def action_move(self, delta: int) -> None:
+        start = self._sel if self._sel >= 0 else (-1 if delta > 0 else 0)
+        self._select((start + delta) % len(self._item_ids))
+
+    def action_activate(self) -> None:
+        if 0 <= self._sel < len(self._item_ids):
+            self._do(self._item_ids[self._sel])
+
+    def on_mouse_move(self, event: events.MouseMove) -> None:
+        x, y = event.screen_x, event.screen_y
+        for i, iid in enumerate(self._item_ids):
+            try:
+                if self.query_one(f"#{iid}", Static).region.contains(x, y):
+                    if self._sel != i:
+                        self._select(i)
+                    return
+            except Exception:
+                continue
+        if self._sel != -1:
+            self._select(-1)
+
+    def _do(self, action: str) -> None:
+        if action == "docs":
+            open_with_default(self.url)  # opens in the default browser
+        elif action == "copy":
+            if copy_to_clipboard(self.url):
+                self.app.notify("Doc link copied", timeout=1.5)
+        self.dismiss()
+
+    def on_click(self, event: events.Click) -> None:
+        node = event.widget
+        nid = getattr(node, "id", None) if node is not None else None
+        if nid in ("docs", "copy"):
+            self._do(nid)
+            return
+        if nid == "close":
+            self.dismiss()
+            return
+        cur = node
+        while cur is not None:
+            if getattr(cur, "id", None) == "wrap":
+                return
+            cur = cur.parent
+        self.dismiss()
+
+
 class ConfirmDialog(ModalScreen[bool]):
     """Small yes/no confirmation popup. Dismisses True (confirm) or False."""
 
@@ -1030,7 +1194,7 @@ class SentryApp(App):
     Screen { background: $surface; }
     /* Modals float over the panes — keep their screen background transparent
        (the app-level Screen rule would otherwise make them solid). */
-    FileMenu, ConfirmDialog, LinkSession { background: $surface 0%; }
+    FileMenu, ConfirmDialog, LinkSession, NativeInfo { background: $surface 0%; }
     #top, #bottom { border: round $primary-darken-2; }
     #top { height: 50%; }
     #bottom { height: 1fr; }
@@ -1381,10 +1545,12 @@ class SentryApp(App):
             self._restore_state(sel, st)
 
     def _status_of(self, kind: str, name: str) -> str:
-        """One of: verified (on disk) | confirmed | denied | unconfirmed.
-        An on-disk file always wins, even over a stale 'denied'."""
+        """One of: verified (on disk) | native (Claude built-in) | confirmed |
+        denied | unconfirmed. An on-disk file always wins, even over 'denied'."""
         if find_skill_or_agent_file(kind, name):
             return "verified"
+        if is_native(kind, name):
+            return "native"
         key = f"{kind}::{name}"
         conf = getattr(self, "_confirmations", {"confirmed": set(), "denied": set()})
         if key in conf["denied"]:
@@ -1520,13 +1686,15 @@ class SentryApp(App):
             # catalogue lives in the inventory view (▶ View all installed).
             if s == 0:
                 continue
-            # Only verified (on disk) or user-confirmed items appear here;
-            # unconfirmed/denied are quarantined in the Unconfirmed tab.
-            if self._status_of(kind, name) not in ("verified", "confirmed"):
+            # Verified (on disk), Claude-native, or user-confirmed items appear
+            # here; unconfirmed/denied are quarantined in the Unconfirmed tab.
+            status = self._status_of(kind, name)
+            if status not in ("verified", "confirmed", "native"):
                 continue
             shown += 1
+            disp = f"{name} (native)" if status == "native" else name
             table.add_row(
-                truncate_left(name, name_w),
+                truncate_left(disp, name_w),
                 str(s),
                 str(rec["7d"]) if rec["7d"] else "",
                 str(rec["all"]) if rec["all"] else "",
@@ -1605,6 +1773,12 @@ class SentryApp(App):
             tab = "agents" if table_id == "agents-table" else "skills"
             self._confirm_inventory(tab)
             return
+        # Claude-native skill/agent → offer the docs link instead of a file menu.
+        if "::" in row_key:
+            kind, name = row_key.split("::", 1)
+            if not find_skill_or_agent_file(kind, name) and is_native(kind, name):
+                self.push_screen(NativeInfo(kind, name, native_doc_url(kind, name)))
+                return
         path = self._path_for_row(table_id, row_key)
         if path is None:
             return
@@ -1630,10 +1804,16 @@ class SentryApp(App):
         if message.table.id == "unconfirmed-table":
             self._handle_unconfirmed_click(rk, message.column)
             return
-        # Otherwise the only row that *acts* on a plain left-click is "View all".
         if rk == VIEW_ALL_KEY:
             tab = "agents" if message.table.id == "agents-table" else "skills"
             self._confirm_inventory(tab)
+            return
+        # Left-click a native skill/agent → open the docs-link menu (it has no
+        # file to open, so the docs link is its only action).
+        if message.table.id in ("skills-table", "agents-table") and "::" in rk:
+            kind, name = rk.split("::", 1)
+            if not find_skill_or_agent_file(kind, name) and is_native(kind, name):
+                self.push_screen(NativeInfo(kind, name, native_doc_url(kind, name)))
 
     def _handle_unconfirmed_click(self, row_key: str, column: int) -> None:
         keys = getattr(self, "_unconfirmed_keys", set())
