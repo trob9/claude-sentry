@@ -201,15 +201,33 @@ Theme changes (Settings → "Change theme") persist across launches.
 
 ```
 ~/.claude/sentry/
-  events.jsonl        # one JSON line per tool call, append-only
+  events.jsonl        # one JSON line per tool call, append-only (auto-trimmed)
   config.json         # divider position, theme, path-display mode
   confirmations.json  # your confirm/deny decisions for the Unconfirmed tab
+  debug.log           # last few swallowed errors (only if something went wrong)
   win-session/        # records which Claude session is active per WT window
   locks/              # per-window guards so the pane only auto-launches once
 ```
 
 `events.jsonl` is plain JSON-lines — safe to read, archive, or delete. Deleting
-it resets all counts; the hooks repopulate it as you keep working.
+it resets all counts; the hooks repopulate it as you keep working. It's kept
+bounded automatically (trimmed to the most recent lines once it grows large).
+
+---
+
+## Troubleshooting
+
+**The sidebar stays empty.** The hooks fail silently by design (so they never
+break a tool call), so an empty pane usually means one of:
+
+- You haven't **restarted your Claude session** since running
+  `claude-sentry-install` — hooks only load at session start.
+- The sidebar isn't **linked** to the session you're using — press `l` and paste
+  the ID from `/status` (or run `claude-sentry --all-sessions` to see everything).
+- The hook command isn't on `PATH`. Check whether `~/.claude/sentry/events.jsonl`
+  exists and grows as you work; if it never appears, run `claude-sentry-hook` in a
+  shell to confirm it's found, and look at `~/.claude/sentry/debug.log` for the
+  reason.
 
 ---
 
