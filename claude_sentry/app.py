@@ -1097,11 +1097,17 @@ class SentryTable(DataTable):
             hit = self._cell_at(event)
             if hit:
                 self.post_message(self.RightClicked(self, hit[0], hit[1]))
-        elif event.button == 1:  # left-click → notify, but let DataTable select
+        elif event.button == 1:  # left-click
             hit = self._cell_at(event)
             if hit:
-                # Don't stop the event — DataTable still moves the cursor.
+                # Clicking a real row (re)shows the highlight; don't stop the
+                # event so DataTable still moves the cursor there.
+                self.show_cursor = True
                 self.post_message(self.LeftClicked(self, hit[0], hit[1]))
+            else:
+                # Clicked blank space below the rows (or the header) → clear the
+                # default row selection.
+                self.show_cursor = False
 
 
 class LinkSession(ModalScreen[str]):
