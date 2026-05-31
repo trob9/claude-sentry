@@ -43,6 +43,19 @@ merges files.
 
 ---
 
+## Audit which skills and agents you actually use
+
+Skills, agents, and plugins pile up fast — but which ones earn their keep? Press
+`v` (or click *View all installed*) for the full inventory: every skill and agent
+on your machine, the plugin it came from, and a **this-week** and **all-time**
+count of how often you've actually run it. Sort by usage and the picture is
+instant — what you lean on every day, what you forgot you installed, and what's
+safe to prune.
+
+![claude-sentry inventory — skills sorted by usage](docs/inventory.png)
+
+---
+
 ## Why not just scroll the transcript?
 
 You can — but the transcript interleaves Claude's prose with its tool calls, so
