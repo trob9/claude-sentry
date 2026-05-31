@@ -1,8 +1,16 @@
 # claude-sentry
 
-A sidebar TUI that watches a Claude Code session and shows you, live, what it's
-touching — files edited, skills and agents invoked, and tool calls — without you
-having to scroll back through the transcript.
+![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)
+![Built with Textual](https://img.shields.io/badge/built%20with-Textual-5a2ca0.svg)
+
+**See what Claude Code is touching — live.** A sidebar that shows every file it
+edits, skill and agent it runs, and tool it calls, so you never scroll back
+through the transcript to find out what changed.
+
+```bash
+pipx install git+https://github.com/trob9/claude-sentry.git && claude-sentry-install
+```
 
 ```
 ┌─ ▼ Activity (this session) ──────────────────────┐
@@ -33,6 +41,18 @@ the machine with global usage counts.
 
 ---
 
+## Why not just scroll the transcript?
+
+You can — but the transcript interleaves Claude's prose with its tool calls, so
+finding "which files actually changed" means reading past everything else, and
+the answer scrolls away as the session grows. claude-sentry pulls just the
+**signal** into a fixed pane: a deduplicated list of touched files (newest
+first, deletions in red, with line counts), and a running tally of which skills,
+agents, and tools the session leans on. It updates live, so it's a glance, not a
+search. Nothing to query, nothing to scroll.
+
+---
+
 ## What it needs to work
 
 claude-sentry has two moving parts:
@@ -54,11 +74,17 @@ claude-sentry has two moving parts:
 
 ## Setup (2 steps)
 
+**Prerequisite:** Python ≥ 3.10. ([pipx](https://pipx.pypa.io/) recommended — it
+isolates the app and guarantees the commands land on your `PATH`.)
+
 ### 1. Install the package
 
 ```bash
-pipx install claude-sentry
+pipx install git+https://github.com/trob9/claude-sentry.git
 ```
+
+> Not on PyPI yet — installing straight from GitHub works today. Once published,
+> this becomes `pipx install claude-sentry`.
 
 This puts four commands on your `PATH`:
 
@@ -69,9 +95,9 @@ This puts four commands on your `PATH`:
 | `claude-sentry-launch` | the auto-dock hook (Windows Terminal only) |
 | `claude-sentry-install` | wires the hooks into your Claude settings |
 
-`pipx` is recommended because it isolates the app and guarantees the four
-commands land on your `PATH`. Plain `pip install claude-sentry` also works if you
-manage your own environment.
+(Plain `pip install git+https://github.com/trob9/claude-sentry.git` also works
+if you manage your own environment — just make sure the four commands land on
+your `PATH`.)
 
 ### 2. Register the hooks
 
@@ -187,7 +213,7 @@ terminal manually and run `claude-sentry` in the new pane.
 ## Development
 
 ```bash
-git clone <repo> && cd claude-sentry
+git clone https://github.com/trob9/claude-sentry.git && cd claude-sentry
 python -m venv .venv && .venv/bin/pip install -e .   # Windows: .venv\Scripts\pip
 claude-sentry-install
 ```
@@ -195,3 +221,8 @@ claude-sentry-install
 With an editable install (`-e`), edits to `claude_sentry/` take effect on the
 next launch. The app is a single module, `claude_sentry/app.py`; the hooks are
 `hook.py` and `launch_hook.py`; the settings wiring is `install.py`.
+
+---
+
+Found a bug or have an idea? [Open an issue](https://github.com/trob9/claude-sentry/issues).
+If claude-sentry saves you a scroll, a ⭐ helps other people find it.

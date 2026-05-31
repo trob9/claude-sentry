@@ -9,7 +9,7 @@ description = "A sidebar TUI showing what the active Claude Code session is touc
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "Tom" }]
+authors = [{ name = "trob9" }]
 dependencies = [
     "textual>=0.86.0",
 ]

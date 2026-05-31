@@ -14,3 +14,7 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# README audit artifacts (local only)
+.readme-roast/
+README-AUDIT-REPORT.md
