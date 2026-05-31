@@ -50,6 +50,12 @@ Left-click a row to select it. Right-click (or press `m`) opens a context menu â
 *View all installed*) to open a separate window listing every skill and agent on
 the machine with global usage counts.
 
+**Path display:** open Settings (`s` or `Ctrl+P`) and pick how Activity shows
+paths â€” *filename only* (`app.py`), *filename + 1 folder* (`claude-sentry/app.py`),
+or *full path* (`~/Projects/claude-sentry/app.py`). The choice persists. Rows are
+always de-duplicated by the full path, so changing the display never splits or
+merges files.
+
 ---
 
 ## Why not just scroll the transcript?

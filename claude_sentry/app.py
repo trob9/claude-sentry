@@ -41,11 +41,14 @@ def is_session_id(s: str) -> bool:
 IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
 
+from functools import partial
+
 from rich.text import Text
 
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.command import DiscoveryHit, Hit, Provider
 from textual.containers import Vertical, Horizontal
 from textual.coordinate import Coordinate
 from textual.screen import ModalScreen
@@ -135,6 +138,30 @@ def collapse_home(path: str) -> str:
             return str(p).replace("\\", "/")
     except Exception:
         return path
+
+
+# How the Activity pane renders a path. Keying/dedup always uses the FULL path;
+# only the displayed text changes.
+PATH_MODES = ("name", "name1", "full")
+PATH_MODE_LABELS = {
+    "name": "Activity paths: filename only",
+    "name1": "Activity paths: filename + 1 folder",
+    "full": "Activity paths: full path",
+}
+
+
+def format_path(path: str, mode: str) -> str:
+    """Display form of a path for the chosen mode. Dedup still keys on the full
+    path elsewhere — this only affects what's shown."""
+    full = collapse_home(path)  # already forward-slashed, ~ for home
+    if mode == "full":
+        return full
+    parts = full.split("/")
+    if mode == "name":
+        return parts[-1]
+    if mode == "name1":
+        return "/".join(parts[-2:]) if len(parts) >= 2 else parts[-1]
+    return full
 
 
 # ---------------------------------------------------------------------------
@@ -1217,9 +1244,34 @@ class Divider(Static):
 
 
 # ---------------------------------------------------------------------------
+# Command-palette provider: the three Activity path-display modes show up as
+# entries in the Settings palette (Ctrl+P / s).
+
+class PathModeProvider(Provider):
+    def _entries(self):
+        cur = getattr(self.app, "_path_mode", "full")
+        for mode in PATH_MODES:
+            tick = "● " if mode == cur else "○ "
+            yield mode, tick + PATH_MODE_LABELS[mode]
+
+    async def discover(self):
+        for mode, label in self._entries():
+            yield DiscoveryHit(label, partial(self.app.set_path_mode, mode))
+
+    async def search(self, query: str):
+        matcher = self.matcher(query)
+        for mode, label in self._entries():
+            score = matcher.match(label)
+            if score > 0:
+                yield Hit(score, matcher.highlight(label),
+                          partial(self.app.set_path_mode, mode))
+
+
+# ---------------------------------------------------------------------------
 # Main session app
 
 class SentryApp(App):
+    COMMANDS = App.COMMANDS | {PathModeProvider}
     CSS = """
     Screen { background: $surface; }
     /* Modals float over the panes — keep their screen background transparent
@@ -1276,7 +1328,19 @@ class SentryApp(App):
         saved_theme = cfg.get("theme")
         if saved_theme:
             self.theme = saved_theme
+        mode = cfg.get("path_mode", "full")
+        self._path_mode = mode if mode in PATH_MODES else "full"
         self._cols_ready = False  # set once on_mount has added columns
+
+    def set_path_mode(self, mode: str) -> None:
+        if mode not in PATH_MODES:
+            return
+        self._path_mode = mode
+        cfg = load_config()
+        cfg["path_mode"] = mode
+        save_config(cfg)
+        self.refresh_data(force=True)
+        self.notify(f"{PATH_MODE_LABELS[mode]}", timeout=2)
 
     def watch_theme(self, theme: str) -> None:
         cfg = load_config()
@@ -1662,7 +1726,7 @@ class SentryApp(App):
             act = action_glyph.get(rec["action"], Text(rec["action"][:3]))
             rm = Text(f"-{rec['removed']}", style="red") if rec["removed"] else Text("")
             ad = Text(f"+{rec['added']}", style="green") if rec["added"] else Text("")
-            display_str = truncate_left(collapse_home(path), file_w)
+            display_str = truncate_left(format_path(path, self._path_mode), file_w)
             # Red filename = file is NOT on disk *right now*. The action glyph
             # ("del") records the last logged action; a file deleted then
             # recreated keeps the glyph but is no longer red.
