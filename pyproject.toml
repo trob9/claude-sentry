@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claude-sentry"
+version = "0.1.0"
+description = "A sidebar TUI showing what the active Claude Code session is touching: live edits, skill/agent usage, and tool calls."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Tom" }]
+dependencies = [
+    "textual>=0.86.0",
+]
+
+[project.scripts]
+claude-sentry = "claude_sentry.app:main"
+claude-sentry-hook = "claude_sentry.hook:main"
+claude-sentry-launch = "claude_sentry.launch_hook:main"
+claude-sentry-install = "claude_sentry.install:main"
+
+[tool.setuptools.packages.find]
+include = ["claude_sentry*"]
