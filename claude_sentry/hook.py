@@ -83,6 +83,12 @@ def _parse_deletions(command: str, cwd: str) -> list[str]:
     return targets
 
 
+def _norm(path) -> str:
+    """Store paths with forward slashes so the same file logged by an Edit and
+    by a Bash `rm` (which already normalises) dedups to one Activity row."""
+    return str(path).replace("\\", "/")
+
+
 def classify(tool_name: str, tool_input: dict, cwd: str) -> list[dict]:
     """Return zero or more event payload dicts. Bash deletions can yield many."""
     if tool_name == "Edit":
@@ -90,7 +96,7 @@ def classify(tool_name: str, tool_input: dict, cwd: str) -> list[dict]:
         if not path:
             return []
         return [{
-            "type": "edit", "action": "edited", "target": str(path),
+            "type": "edit", "action": "edited", "target": _norm(path),
             "removed": _lines(tool_input.get("old_string", "")),
             "added": _lines(tool_input.get("new_string", "")),
         }]
@@ -99,7 +105,7 @@ def classify(tool_name: str, tool_input: dict, cwd: str) -> list[dict]:
         if not path:
             return []
         return [{
-            "type": "edit", "action": "created", "target": str(path),
+            "type": "edit", "action": "created", "target": _norm(path),
             "removed": 0,
             "added": _lines(tool_input.get("content", "")),
         }]
@@ -109,7 +115,7 @@ def classify(tool_name: str, tool_input: dict, cwd: str) -> list[dict]:
             return []
         edits = tool_input.get("edits", []) or []
         return [{
-            "type": "edit", "action": "edited", "target": str(path),
+            "type": "edit", "action": "edited", "target": _norm(path),
             "removed": sum(_lines(e.get("old_string", "")) for e in edits),
             "added": sum(_lines(e.get("new_string", "")) for e in edits),
         }]
@@ -117,7 +123,7 @@ def classify(tool_name: str, tool_input: dict, cwd: str) -> list[dict]:
         path = tool_input.get("notebook_path")
         if not path:
             return []
-        return [{"type": "edit", "action": "edited", "target": str(path),
+        return [{"type": "edit", "action": "edited", "target": _norm(path),
                  "removed": 0, "added": 0}]
     if tool_name == "Bash":
         cmd = tool_input.get("command", "") or ""

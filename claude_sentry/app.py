@@ -1613,6 +1613,13 @@ class SentryApp(App):
         except Exception:
             pass
 
+    @staticmethod
+    def _norm_path(p: str) -> str:
+        """Key used to dedup the same file across slash styles (and case on
+        Windows). `C:\\a\\b.py` and `C:/a/b.py` collapse to one row."""
+        n = p.replace("\\", "/")
+        return n.lower() if IS_WIN else n
+
     def _render_edits(self, evts: list[dict]) -> None:
         edits = [e for e in evts if e.get("type") == "edit"]
         if self.session_id:
@@ -1622,18 +1629,21 @@ class SentryApp(App):
             target = e.get("target") or ""
             if not target:
                 continue
+            nk = self._norm_path(target)
             ts = parse_ts(e.get("ts", ""))
-            rec = agg.setdefault(target, {
+            rec = agg.setdefault(nk, {
                 "ts": ts, "added": 0, "removed": 0, "action": "edited",
+                "path": target,
             })
-            # Latest action wins
+            # Latest event wins for the displayed action, time, and path form.
             if ts >= rec["ts"]:
                 rec["ts"] = ts
                 rec["action"] = e.get("action", "edited") or "edited"
+                rec["path"] = target
             rec["added"] += int(e.get("added", 0) or 0)
             rec["removed"] += int(e.get("removed", 0) or 0)
 
-        rows = sorted(agg.items(), key=lambda kv: kv[1]["ts"], reverse=True)[:100]
+        rows = sorted(agg.values(), key=lambda r: r["ts"], reverse=True)[:100]
         table = self.query_one("#edits-table", DataTable)
         table.clear()
 
@@ -1647,7 +1657,8 @@ class SentryApp(App):
         file_w = self._avail_width(table, fixed=15, ncols=5)
         self._fix_col_width(table, "file", file_w)
 
-        for path, rec in rows:
+        for rec in rows:
+            path = rec["path"]
             act = action_glyph.get(rec["action"], Text(rec["action"][:3]))
             rm = Text(f"-{rec['removed']}", style="red") if rec["removed"] else Text("")
             ad = Text(f"+{rec['added']}", style="green") if rec["added"] else Text("")
