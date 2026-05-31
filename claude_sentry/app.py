@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -26,6 +27,16 @@ import textwrap
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+# Canonical UUID (8-4-4-4-12 hex) — the shape Claude Code's /status reports.
+_SESSION_ID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def is_session_id(s: str) -> bool:
+    return bool(_SESSION_ID_RE.match(s.strip()))
 
 IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
@@ -1085,6 +1096,7 @@ class LinkSession(ModalScreen[str]):
     LinkSession .head { text-style: bold; padding: 1 0 0 0; height: auto; }
     LinkSession .hint { color: $text-muted; padding: 1 0; height: auto; }
     LinkSession Input { margin: 0 0 1 0; }
+    LinkSession .error { color: $error; height: auto; padding: 0 0 1 0; }
     LinkSession .item {
         width: 100%;
         height: 1;
@@ -1116,6 +1128,7 @@ class LinkSession(ModalScreen[str]):
                 yield Static(self._intro_wrapped, classes="head")
             yield Static(self._hint_wrapped, classes="hint")
             yield Input(placeholder="paste session id (UUID)…", id="sid")
+            yield Static("", id="error", classes="error")  # filled on bad input
             yield Static("▸ Link this session", id="ok", classes="item")
             yield Static("▸ Cancel",            id="cancel", classes="item")
 
@@ -1130,16 +1143,33 @@ class LinkSession(ModalScreen[str]):
     def action_cancel(self) -> None:
         self.dismiss("")
 
+    def _try_submit(self) -> None:
+        """Validate before linking: empty cancels, a non-UUID shows an inline
+        error and keeps the modal open, a valid UUID links."""
+        val = self.query_one("#sid", Input).value.strip()
+        if not val:
+            self.dismiss("")
+            return
+        if not is_session_id(val):
+            self.query_one("#error", Static).update(
+                "⚠  That's not a valid session ID. Run /status in Claude "
+                "and paste the full UUID (it looks like "
+                "1234abcd-…-1234567890ab)."
+            )
+            self.query_one("#sid", Input).focus()
+            return
+        self.dismiss(val)
+
     def action_submit(self) -> None:
-        self.dismiss(self.query_one("#sid", Input).value.strip())
+        self._try_submit()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        self.dismiss(event.value.strip())
+        self._try_submit()
 
     def on_click(self, event: events.Click) -> None:
         nid = getattr(event.widget, "id", None) if event.widget is not None else None
         if nid == "ok":
-            self.dismiss(self.query_one("#sid", Input).value.strip())
+            self._try_submit()
             return
         if nid == "cancel":
             self.dismiss("")
