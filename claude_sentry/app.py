@@ -2,17 +2,20 @@
 
 Modes
 -----
-default   : sidebar for one Claude session. Top pane shows that session's edits;
-            bottom pane has Skills/Agents tabs with global 7D + all-time counts.
-            Tab labels show how many distinct items have been used *this session*.
+default   : sidebar for one Claude session. Top pane shows that session's file
+            activity; bottom pane has Skills / Agents / Tools / Unconfirmed
+            tabs (session, this-week, and all-time counts).
 
 --inventory: full-window catalog of every installed skill and agent on this
-            machine, with the same 7D + all-time count columns.
+            machine, with week + all-time count columns.
 
-Storage
--------
-Events log : ~/.claude/sentry/events.jsonl
-Config     : ~/.claude/sentry/config.json   (persists divider position)
+Storage (~/.claude/sentry/)
+---------------------------
+events.jsonl        append-only log of tool calls (written by the hooks)
+config.json         divider position, theme, path-display mode
+confirmations.json  confirm/deny decisions for the Unconfirmed tab
+win-session/        active Claude session per Windows Terminal window
+locks/              per-window auto-launch guards
 """
 from __future__ import annotations
 
@@ -1292,10 +1295,10 @@ class SentryApp(App):
     TabPane { padding: 0; }
     Footer { background: $surface-darken-2; }
     #hint {
-        height: 1;
+        height: auto;
         background: $surface-darken-2;
         color: $text-muted;
-        content-align: center middle;
+        text-align: center;
     }
     """
 
@@ -1374,7 +1377,14 @@ class SentryApp(App):
                     yield SentryTable(id="unconfirmed-table", cursor_type="row",
                                       zebra_stripes=True, cell_padding=1)
         yield WrappingFooter()
-        yield Static("left-click: select    right-click: menu", id="hint")
+        # Sidebar-width resize is a terminal feature: Windows Terminal has a key
+        # binding; other terminals (iTerm2 etc.) resize by dragging the pane edge.
+        resize = ("alt+shift+←→: widen / narrow" if IS_WIN
+                  else "drag the pane edge: widen / narrow")
+        yield Static(
+            "left-click: select    right-click: options\n" + resize,
+            id="hint",
+        )
 
     # ---- lifecycle ------------------------------------------------------
 
@@ -1391,12 +1401,12 @@ class SentryApp(App):
         edits.add_column("when", key="when", width=4)
 
         # Skills/Agents: name on the LEFT (left-truncated if too long),
-        # session/7D/all counts pinned on the RIGHT and always visible.
+        # session/week/all counts pinned on the RIGHT and always visible.
         for sel in ("#skills-table", "#agents-table"):
             t = self.query_one(sel, DataTable)
             t.add_column("name", key="name")
-            t.add_column("ses", key="ses", width=4)
-            t.add_column("7D", key="7d", width=4)
+            t.add_column("session", key="ses", width=7)
+            t.add_column("week", key="7d", width=4)
             t.add_column("all", key="all", width=4)
 
         tools = self.query_one("#tools-table", DataTable)
@@ -1782,7 +1792,7 @@ class SentryApp(App):
 
         # First row: "view all" pseudo-row
         table.add_row("▶ View all installed…", "", "", "", key=VIEW_ALL_KEY)
-        name_w = self._avail_width(table, fixed=12, ncols=4)  # name + ses+7d+all (4 each)
+        name_w = self._avail_width(table, fixed=15, ncols=4)  # name + session(7)+week(4)+all(4)
         self._fix_col_width(table, "name", name_w)
         shown = 0
         for name, rec in rows:
@@ -1798,11 +1808,12 @@ class SentryApp(App):
                 continue
             shown += 1
             disp = f"{name} (native)" if status == "native" else name
+            # Counts centred under their (wider) headers so they look balanced.
             table.add_row(
                 truncate_left(disp, name_w),
-                str(s),
-                str(rec["7d"]) if rec["7d"] else "",
-                str(rec["all"]) if rec["all"] else "",
+                str(s).center(7),
+                str(rec["7d"]).center(4) if rec["7d"] else "",
+                str(rec["all"]).center(4) if rec["all"] else "",
                 key=f"{kind}::{name}",
             )
 
@@ -2057,8 +2068,8 @@ class InventoryApp(App):
             t = self.query_one(sel, DataTable)
             t.add_column(name_label, key="name")
             t.add_column("plugin", key="plugin", width=24)
-            # width 5 so the sort arrow ("all ▼" = 5 chars) isn't clipped.
-            t.add_column("7D", key="7d", width=5)
+            # width 6 so the header word + sort arrow ("week ▼") isn't clipped.
+            t.add_column("week", key="7d", width=6)
             t.add_column("all", key="all", width=5)
         self.refresh_data()
         self.set_interval(5.0, self.refresh_data)
@@ -2082,7 +2093,7 @@ class InventoryApp(App):
         sort_col, sort_dir = self._sort.get(table_id, ("name", 1))
         t = self.query_one(f"#{table_id}", DataTable)
         for ck, label in (("name", name_label), ("plugin", "plugin"),
-                          ("7d", "7D"), ("all", "all")):
+                          ("7d", "week"), ("all", "all")):
             arrow = (" ▼" if sort_dir == -1 else " ▲") if ck == sort_col else ""
             try:
                 t.columns[ck].label = Text(f"{label}{arrow}")

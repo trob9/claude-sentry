@@ -19,14 +19,15 @@ pipx install git+https://github.com/trob9/claude-sentry.git && claude-sentry-ins
 │ del  …sentry/aliases.json                  50m   │   ← deleted file in red
 │ cre  …sentry/hook.py                 +42   1h   │
 ├──────────── drag or +/- to resize ───────────────┤
-│ Skills │ Agents │ Tools                          │
-│ name                      ses   7D   all         │
+│ Skills │ Agents │ Tools │ Unconfirmed (1)         │
+│ name                  session  week  all         │
 │ ▸ View all installed…                            │
-│ verify (native)            2    3    3           │
+│ verify (native)          2      3    3           │
 └──────────────────────────────────────────────────┘
  + Taller   − Shorter   o Open   r Reveal   c Copy
  m Menu   v View all   l Link   s Settings   q Quit
-        left-click: select    right-click: menu
+   left-click: select    right-click: options
+   alt+shift+←→: widen / narrow   (Windows Terminal)
 ```
 
 - **Activity** (top): files this session edited/created/deleted, with line
@@ -129,9 +130,10 @@ This edits `~/.claude/settings.json` and adds:
   **required** on every platform.
 - **`UserPromptSubmit`** hook (matcher `*`) → runs `claude-sentry-hook` on each
   prompt you send, so a `/slash-command` you type is tracked too (those never go
-  through the Skill tool, so `PostToolUse` alone can't see them). Only commands
-  that resolve to an installed skill/command or a known built-in are logged, so
-  a typo like `/tset` doesn't create a phantom entry.
+  through the Skill tool, so `PostToolUse` alone can't see them). Every leading
+  `/command` is logged; ones that aren't installed or a known built-in land in
+  the **Unconfirmed** tab for you to confirm or dismiss, so a typo like `/tset`
+  never silently becomes a tracked skill.
 - **`SessionStart`** hook (matcher `*`) → runs `claude-sentry-launch`.
   **Windows Terminal only.** It splits a 25%-wide sidebar pane on the right of
   your terminal automatically when a Claude session starts, already linked to
@@ -202,10 +204,11 @@ Theme changes (Settings → "Change theme") persist across launches.
 
 ```
 ~/.claude/sentry/
-  events.jsonl     # one JSON line per tool call, append-only
-  config.json      # divider position + chosen theme
-  win-session/     # records which Claude session is active per WT window
-  locks/           # per-window guards so the pane only auto-launches once
+  events.jsonl        # one JSON line per tool call, append-only
+  config.json         # divider position, theme, path-display mode
+  confirmations.json  # your confirm/deny decisions for the Unconfirmed tab
+  win-session/        # records which Claude session is active per WT window
+  locks/              # per-window guards so the pane only auto-launches once
 ```
 
 `events.jsonl` is plain JSON-lines — safe to read, archive, or delete. Deleting
