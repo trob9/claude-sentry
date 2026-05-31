@@ -33,6 +33,12 @@ pipx install git+https://github.com/trob9/claude-sentry.git && claude-sentry-ins
   add/remove counts and how long ago. Deleted or missing files show in red.
 - **Skills / Agents / Tools** (bottom tabs): what the session invoked. Skills and
   Agents show per-session, 7-day, and all-time counts; Tools is per-session.
+- **Unconfirmed** (bottom tab): a review queue. Anything that *looks* like a
+  skill or agent but isn't installed on disk — a built-in command, a typo, a
+  brand-new command — lands here instead of cluttering the real lists. Click the
+  green ✓ to confirm it (it moves into Skills/Agents) or the red ✗ to dismiss it
+  for good; or use **✓ Confirm all** / **✗ Deny all** at the top to clear the
+  list in one click. Your decisions are saved permanently.
 
 Left-click a row to select it. Right-click (or press `m`) opens a context menu —
 **Open file**, **Show in file browser**, **Copy path**. Press `v` (or click

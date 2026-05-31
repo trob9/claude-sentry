@@ -52,6 +52,8 @@ HOME = Path.home()
 CLAUDE_DIR = HOME / ".claude"
 
 VIEW_ALL_KEY = "__VIEW_ALL__"
+CONFIRM_ALL_KEY = "__CONFIRM_ALL__"
+DENY_ALL_KEY = "__DENY_ALL__"
 
 KEY_DISPLAY = {
     "plus": "+",
@@ -437,6 +439,54 @@ def save_config(cfg: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Confirmations — the user's permanent confirm/deny decisions for skills/agents
+# that aren't backed by a file on disk (built-ins, plugins we can't resolve,
+# typos). Keyed "kind::name", e.g. "skill::verify", "agent::general-purpose".
+
+CONFIRM_FILE = SENTRY_DIR / "confirmations.json"
+
+
+def load_confirmations() -> dict:
+    try:
+        data = json.loads(CONFIRM_FILE.read_text(encoding="utf-8"))
+        return {
+            "confirmed": set(data.get("confirmed", [])),
+            "denied": set(data.get("denied", [])),
+        }
+    except Exception:
+        return {"confirmed": set(), "denied": set()}
+
+
+def save_confirmations(state: dict) -> None:
+    try:
+        SENTRY_DIR.mkdir(parents=True, exist_ok=True)
+        CONFIRM_FILE.write_text(
+            json.dumps(
+                {"confirmed": sorted(state["confirmed"]),
+                 "denied": sorted(state["denied"])},
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def confirm_keys(keys: set[str]) -> None:
+    state = load_confirmations()
+    state["confirmed"] |= keys
+    state["denied"] -= keys
+    save_confirmations(state)
+
+
+def deny_keys(keys: set[str]) -> None:
+    state = load_confirmations()
+    state["denied"] |= keys
+    state["confirmed"] -= keys
+    save_confirmations(state)
+
+
+# ---------------------------------------------------------------------------
 # Aggregation
 
 def aggregate_counts(events_: list[dict], kind: str) -> dict[str, dict]:
@@ -805,18 +855,21 @@ class SentryTable(DataTable):
     """
 
     class RightClicked(events.Message):
-        def __init__(self, table: "SentryTable", row_key: str) -> None:
+        def __init__(self, table: "SentryTable", row_key: str, column: int) -> None:
             super().__init__()
             self.table = table
             self.row_key = row_key
+            self.column = column
 
     class LeftClicked(events.Message):
-        def __init__(self, table: "SentryTable", row_key: str) -> None:
+        def __init__(self, table: "SentryTable", row_key: str, column: int) -> None:
             super().__init__()
             self.table = table
             self.row_key = row_key
+            self.column = column
 
-    def _row_key_at(self, event: events.MouseDown) -> str | None:
+    def _cell_at(self, event: events.MouseDown) -> tuple[str, int] | None:
+        """Return (row_key, column_index) for the clicked cell, or None."""
         meta = getattr(event.style, "meta", None) or {}
         if "row" not in meta or "column" not in meta:
             return None
@@ -827,22 +880,23 @@ class SentryTable(DataTable):
         if coord.row < 0:  # header
             return None
         try:
-            return self.coordinate_to_cell_key(coord).row_key.value
+            row_key = self.coordinate_to_cell_key(coord).row_key.value
         except Exception:
             return None
+        return (row_key, coord.column) if row_key else None
 
     def on_mouse_down(self, event: events.MouseDown) -> None:
         if event.button == 3:  # right-click → context menu
             event.stop()
             event.prevent_default()
-            rk = self._row_key_at(event)
-            if rk:
-                self.post_message(self.RightClicked(self, rk))
+            hit = self._cell_at(event)
+            if hit:
+                self.post_message(self.RightClicked(self, hit[0], hit[1]))
         elif event.button == 1:  # left-click → notify, but let DataTable select
-            rk = self._row_key_at(event)
-            if rk:
+            hit = self._cell_at(event)
+            if hit:
                 # Don't stop the event — DataTable still moves the cursor.
-                self.post_message(self.LeftClicked(self, rk))
+                self.post_message(self.LeftClicked(self, hit[0], hit[1]))
 
 
 class LinkSession(ModalScreen[str]):
@@ -1058,6 +1112,9 @@ class SentryApp(App):
                 with TabPane("Tools", id="tools-tab"):
                     yield SentryTable(id="tools-table", cursor_type="row",
                                       zebra_stripes=True, cell_padding=1)
+                with TabPane("Unconfirmed", id="unconfirmed-tab"):
+                    yield SentryTable(id="unconfirmed-table", cursor_type="row",
+                                      zebra_stripes=True, cell_padding=1)
         yield WrappingFooter()
         yield Static("left-click: select    right-click: menu", id="hint")
 
@@ -1087,6 +1144,14 @@ class SentryApp(App):
         tools = self.query_one("#tools-table", DataTable)
         tools.add_column("tool", key="name")
         tools.add_column("uses", key="uses", width=5)
+
+        # Unconfirmed review queue: name | kind | seen | ✓ | ✗
+        unconf = self.query_one("#unconfirmed-table", DataTable)
+        unconf.add_column("name", key="name")
+        unconf.add_column("kind", key="kind", width=5)
+        unconf.add_column("seen", key="seen", width=4)
+        unconf.add_column("✓", key="ok", width=1)
+        unconf.add_column("✗", key="no", width=1)
         if self._top_height is None:
             self._top_height = max(3, self.screen.size.height // 2)
         self.query_one("#top").styles.height = self._top_height
@@ -1208,7 +1273,8 @@ class SentryApp(App):
 
     # ---- data refresh ---------------------------------------------------
 
-    _TABLES = ("#edits-table", "#skills-table", "#agents-table", "#tools-table")
+    _TABLES = ("#edits-table", "#skills-table", "#agents-table",
+               "#tools-table", "#unconfirmed-table")
 
     def _capture_state(self, sel: str) -> dict:
         try:
@@ -1302,13 +1368,30 @@ class SentryApp(App):
             return
         self._last_sig = sig
 
+        # Load the user's confirm/deny decisions fresh each tick (tiny file).
+        self._confirmations = load_confirmations()
+
         states = {sel: self._capture_state(sel) for sel in self._TABLES}
         self._render_edits(evts)
         self._render_counts(evts, "skill", "#skills-table", "skills-tab", "Skills")
         self._render_counts(evts, "agent", "#agents-table", "agents-tab", "Agents")
         self._render_tools(evts)
+        self._render_unconfirmed(evts)
         for sel, st in states.items():
             self._restore_state(sel, st)
+
+    def _status_of(self, kind: str, name: str) -> str:
+        """One of: verified (on disk) | confirmed | denied | unconfirmed.
+        An on-disk file always wins, even over a stale 'denied'."""
+        if find_skill_or_agent_file(kind, name):
+            return "verified"
+        key = f"{kind}::{name}"
+        conf = getattr(self, "_confirmations", {"confirmed": set(), "denied": set()})
+        if key in conf["denied"]:
+            return "denied"
+        if key in conf["confirmed"]:
+            return "confirmed"
+        return "unconfirmed"
 
     def _render_tools(self, evts: list[dict]) -> None:
         if not self.session_id:
@@ -1430,25 +1513,76 @@ class SentryApp(App):
         table.add_row("▶ View all installed…", "", "", "", key=VIEW_ALL_KEY)
         name_w = self._avail_width(table, fixed=12, ncols=4)  # name + ses+7d+all (4 each)
         self._fix_col_width(table, "name", name_w)
+        shown = 0
         for name, rec in rows:
             s = sess_counts.get(name, 0)
             # Sidebar tabs only list items actually used THIS session. The full
             # catalogue lives in the inventory view (▶ View all installed).
             if s == 0:
                 continue
-            label = name if find_skill_or_agent_file(kind, name) else f"{name} (native)"
+            # Only verified (on disk) or user-confirmed items appear here;
+            # unconfirmed/denied are quarantined in the Unconfirmed tab.
+            if self._status_of(kind, name) not in ("verified", "confirmed"):
+                continue
+            shown += 1
             table.add_row(
-                truncate_left(label, name_w),
+                truncate_left(name, name_w),
                 str(s),
                 str(rec["7d"]) if rec["7d"] else "",
                 str(rec["all"]) if rec["all"] else "",
                 key=f"{kind}::{name}",
             )
 
-        n = distinct_used_in_session(evts, self.session_id, kind)
         try:
             pane = self.query_one(f"#{tab_id}", TabPane)
-            pane.label = f"{label} ({n})"  # type: ignore[assignment]
+            pane.label = f"{label} ({shown})"  # type: ignore[assignment]
+        except Exception:
+            pass
+
+    def _render_unconfirmed(self, evts: list[dict]) -> None:
+        """Review queue: every skill/agent name in the log that isn't backed by
+        a file and hasn't been confirmed or denied yet. Global across sessions —
+        it's a cleanup list, not a per-session view."""
+        seen: dict[tuple[str, str], int] = {}
+        for e in evts:
+            kind = e.get("type", "")
+            if kind not in ("skill", "agent"):
+                continue
+            name = e.get("target") or ""
+            if not name:
+                continue
+            if self._status_of(kind, name) != "unconfirmed":
+                continue
+            seen[(kind, name)] = seen.get((kind, name), 0) + 1
+
+        # Most-seen first — those are most likely real and worth confirming.
+        rows = sorted(seen.items(), key=lambda kv: (-kv[1], kv[0][1]))
+        self._unconfirmed_keys = {f"{k}::{n}" for (k, n), _ in rows}
+
+        table = self.query_one("#unconfirmed-table", DataTable)
+        table.clear()
+        # fixed: kind=5, seen=4, ok=1, no=1 → 11; 5 columns.
+        name_w = self._avail_width(table, fixed=11, ncols=5)
+        self._fix_col_width(table, "name", name_w)
+
+        if rows:
+            table.add_row(Text("✓ Confirm all", style="green"), "", "", "", "",
+                          key=CONFIRM_ALL_KEY)
+            table.add_row(Text("✗ Deny all", style="red"), "", "", "", "",
+                          key=DENY_ALL_KEY)
+        for (kind, name), n in rows:
+            table.add_row(
+                truncate_left(name, name_w),
+                kind,                      # "skill" / "agent" (col width 5)
+                str(n),
+                Text("✓", style="bold green"),
+                Text("✗", style="bold red"),
+                key=f"{kind}::{name}",
+            )
+
+        try:
+            pane = self.query_one("#unconfirmed-tab", TabPane)
+            pane.label = f"Unconfirmed ({len(rows)})"  # type: ignore[assignment]
         except Exception:
             pass
 
@@ -1491,11 +1625,39 @@ class SentryApp(App):
         self._handle_row(message.table.id or "", message.row_key, right_click=True)
 
     def on_sentry_table_left_clicked(self, message: SentryTable.LeftClicked) -> None:
-        # Left-click normally just selects. The only row that *acts* on a plain
-        # left-click is the "View all installed" pseudo-row.
-        if message.row_key == VIEW_ALL_KEY:
+        rk = message.row_key
+        # Unconfirmed tab: ✓ column confirms, ✗ column denies; bulk rows act on all.
+        if message.table.id == "unconfirmed-table":
+            self._handle_unconfirmed_click(rk, message.column)
+            return
+        # Otherwise the only row that *acts* on a plain left-click is "View all".
+        if rk == VIEW_ALL_KEY:
             tab = "agents" if message.table.id == "agents-table" else "skills"
             self._confirm_inventory(tab)
+
+    def _handle_unconfirmed_click(self, row_key: str, column: int) -> None:
+        keys = getattr(self, "_unconfirmed_keys", set())
+        if row_key == CONFIRM_ALL_KEY:
+            if keys:
+                confirm_keys(set(keys))
+                self.notify(f"Confirmed {len(keys)}", timeout=2)
+                self.refresh_data(force=True)
+            return
+        if row_key == DENY_ALL_KEY:
+            if keys:
+                deny_keys(set(keys))
+                self.notify(f"Denied {len(keys)}", timeout=2)
+                self.refresh_data(force=True)
+            return
+        if "::" not in row_key:
+            return
+        # Columns: 0 name, 1 kind, 2 seen, 3 ✓, 4 ✗.
+        if column == 3:
+            confirm_keys({row_key})
+            self.refresh_data(force=True)
+        elif column == 4:
+            deny_keys({row_key})
+            self.refresh_data(force=True)
 
     def _focused_row(self) -> tuple[str, str] | None:
         for sel in ("#edits-table", "#skills-table", "#agents-table", "#tools-table"):
