@@ -11,24 +11,8 @@ through the transcript to find out what changed.
 ```bash
 pipx install git+https://github.com/trob9/claude-sentry.git && claude-sentry-install
 ```
+<img width="1946" height="1073" alt="claude-sentry" src="https://github.com/user-attachments/assets/9f4bded0-9e19-4803-8c4d-e473a230dbcd" />
 
-```
-┌─ ▼ Activity (this session) ──────────────────────┐
-│ act  file                       −     +    when  │
-│ edt  …sentry/app.py            -116  +174   1m   │
-│ del  …sentry/aliases.json                  50m   │   ← deleted file in red
-│ cre  …sentry/hook.py                 +42   1h   │
-├──────────── drag or +/- to resize ───────────────┤
-│ Skills │ Agents │ Tools │ Unconfirmed (1)         │
-│ name                  session  week  all         │
-│ ▸ View all installed…                            │
-│ verify (native)          2      3    3           │
-└──────────────────────────────────────────────────┘
- + Taller   − Shorter   o Open   r Reveal   c Copy
- m Menu   v View all   l Link   s Settings   q Quit
-   left-click: select    right-click: options
-   alt+shift+←→: widen / narrow   (Windows Terminal)
-```
 
 - **Activity** (top): files this session edited/created/deleted, with line
   add/remove counts and how long ago. Deleted or missing files show in red.
