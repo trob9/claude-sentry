@@ -373,7 +373,7 @@ def _plugin_from_path(p: Path) -> str:
     ~/.claude/plugins/**. Handles both cache and marketplace layouts."""
     parts = list(p.parts)
     anchor = None
-    for needle in ("skills", "agents"):
+    for needle in ("skills", "agents", "commands"):
         if needle in parts:
             anchor = parts.index(needle)
             break
@@ -397,7 +397,10 @@ def _plugin_from_path(p: Path) -> str:
 
 
 def discover_skills() -> list[dict]:
-    """All installed skills: ~/.claude/skills/** + plugin caches."""
+    """All installed skills AND commands (Claude merged commands into skills, so
+    a `~/.claude/commands/cc.md` is invokable as `/cc` just like a SKILL.md).
+    Covers user + plugin locations so the inventory matches what the sidebar
+    treats as a real skill."""
     seen: dict[str, dict] = {}
 
     def add(name: str, path: Path, source: str, plugin: str = "") -> None:
@@ -411,10 +414,16 @@ def discover_skills() -> list[dict]:
                 "plugin": plugin,
             }
 
+    # User + plugin skills (directory with SKILL.md)
     for skill_md in (CLAUDE_DIR / "skills").glob("*/SKILL.md"):
         add(skill_md.parent.name, skill_md, "user")
     for skill_md in CLAUDE_DIR.glob("plugins/**/skills/*/SKILL.md"):
         add(skill_md.parent.name, skill_md, "plugin", _plugin_from_path(skill_md))
+    # User + plugin commands (a single .md file; stem is the /name)
+    for cmd in (CLAUDE_DIR / "commands").glob("*.md"):
+        add(cmd.stem, cmd, "user")
+    for cmd in CLAUDE_DIR.glob("plugins/**/commands/*.md"):
+        add(cmd.stem, cmd, "plugin", _plugin_from_path(cmd))
     return sorted(seen.values(), key=lambda d: d["name"].lower())
 
 
