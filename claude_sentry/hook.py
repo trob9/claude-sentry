@@ -136,18 +136,51 @@ def classify(tool_name: str, tool_input: dict, cwd: str) -> list[dict]:
 
 
 _SLASH_RE = re.compile(r"/([A-Za-z0-9][A-Za-z0-9_:-]*)")
+_CLAUDE_DIR = Path(os.path.expanduser("~/.claude"))
+
+# Built-in Claude Code slash commands that have no file on disk (they're bundled
+# in the CLI). Kept short and only the common ones — anything not here and not
+# on disk is treated as a typo/unknown and skipped.
+_BUILTIN_COMMANDS = {
+    "verify", "run", "init", "review", "security-review", "code-review",
+    "simplify", "claude-api", "loop", "schedule", "update-config",
+    "keybindings-help", "fewer-permission-prompts",
+    "status", "model", "clear", "compact", "cost", "resume", "help",
+    "config", "memory", "agents", "mcp", "doctor", "login", "logout",
+}
+
+
+def command_exists(name: str) -> bool:
+    """True if `name` is a real slash command — an installed skill/command on
+    disk, or a known built-in. Filters out typos like `/test`."""
+    bare = name.split(":", 1)[1] if ":" in name else name
+    if bare in _BUILTIN_COMMANDS:
+        return True
+    if (_CLAUDE_DIR / "skills" / bare / "SKILL.md").exists():
+        return True
+    if (_CLAUDE_DIR / "commands" / f"{bare}.md").exists():
+        return True
+    for _ in _CLAUDE_DIR.glob(f"plugins/**/skills/{bare}/SKILL.md"):
+        return True
+    for _ in _CLAUDE_DIR.glob(f"plugins/**/commands/{bare}.md"):
+        return True
+    return False
 
 
 def parse_slash_command(prompt: str) -> str | None:
     """Return the command name from a prompt that starts with `/name`, else None.
-    Ignores prompts that merely contain a slash mid-text (e.g. a file path)."""
+    Ignores prompts that merely contain a slash mid-text (e.g. a file path), and
+    unknown commands that don't resolve to an installed or built-in command."""
     if not prompt:
         return None
     stripped = prompt.lstrip()
     if not stripped.startswith("/"):
         return None
     m = _SLASH_RE.match(stripped)
-    return m.group(1) if m else None
+    if not m:
+        return None
+    name = m.group(1)
+    return name if command_exists(name) else None
 
 
 def main() -> int:

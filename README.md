@@ -112,7 +112,9 @@ This edits `~/.claude/settings.json` and adds:
   **required** on every platform.
 - **`UserPromptSubmit`** hook (matcher `*`) → runs `claude-sentry-hook` on each
   prompt you send, so a `/slash-command` you type is tracked too (those never go
-  through the Skill tool, so `PostToolUse` alone can't see them).
+  through the Skill tool, so `PostToolUse` alone can't see them). Only commands
+  that resolve to an installed skill/command or a known built-in are logged, so
+  a typo like `/tset` doesn't create a phantom entry.
 - **`SessionStart`** hook (matcher `*`) → runs `claude-sentry-launch`.
   **Windows Terminal only.** It splits a 25%-wide sidebar pane on the right of
   your terminal automatically when a Claude session starts, already linked to
