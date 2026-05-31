@@ -23,6 +23,44 @@ from pathlib import Path
 
 LOG_DIR = Path(os.path.expanduser("~/.claude/sentry"))
 LOG_FILE = LOG_DIR / "events.jsonl"
+DEBUG_FILE = LOG_DIR / "debug.log"
+
+# Keep the log bounded: once it passes the cap, prune to the most recent lines.
+# ~120 bytes/line, so 12 MB ≈ 100k events — months of heavy use.
+LOG_MAX_BYTES = 12 * 1024 * 1024
+LOG_KEEP_LINES = 60_000
+DEBUG_MAX_BYTES = 1 * 1024 * 1024
+
+
+def _debug(where: str, exc: BaseException) -> None:
+    """Record a swallowed error so failures aren't completely invisible. Itself
+    fail-silent and size-capped — the hook must never crash the parent tool."""
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        if DEBUG_FILE.exists() and DEBUG_FILE.stat().st_size > DEBUG_MAX_BYTES:
+            DEBUG_FILE.write_text("", encoding="utf-8")
+        ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with DEBUG_FILE.open("a", encoding="utf-8") as f:
+            f.write(f"{ts} hook {where}: {type(exc).__name__}: {exc}\n")
+    except Exception:
+        pass
+
+
+def _maybe_trim() -> None:
+    """If the log has grown past the cap, keep only the most recent lines."""
+    try:
+        if not LOG_FILE.exists() or LOG_FILE.stat().st_size <= LOG_MAX_BYTES:
+            return
+        with LOG_FILE.open("r", encoding="utf-8") as f:
+            lines = f.readlines()
+        if len(lines) <= LOG_KEEP_LINES:
+            return
+        tmp = LOG_FILE.with_suffix(".jsonl.tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            f.writelines(lines[-LOG_KEEP_LINES:])
+        os.replace(tmp, LOG_FILE)  # atomic swap
+    except Exception as exc:
+        _debug("trim", exc)
 
 
 def _lines(s: str) -> int:
@@ -194,13 +232,21 @@ def main() -> int:
 def _append(events_: list[dict], session_id: str, cwd: str) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # Build the whole block and write it in a single call. A lone append of a
+    # small block is effectively atomic, so two concurrent Claude sessions can't
+    # interleave each other's lines mid-record.
     try:
+        block = "".join(
+            json.dumps({"ts": ts, "session_id": session_id, "cwd": cwd, **fields},
+                       ensure_ascii=False) + "\n"
+            for fields in events_
+        )
         with LOG_FILE.open("a", encoding="utf-8") as f:
-            for fields in events_:
-                event = {"ts": ts, "session_id": session_id, "cwd": cwd, **fields}
-                f.write(json.dumps(event, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
+            f.write(block)
+    except Exception as exc:
+        _debug("append", exc)
+        return
+    _maybe_trim()
 
 
 if __name__ == "__main__":

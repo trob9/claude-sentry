@@ -71,6 +71,7 @@ CLAUDE_DIR = HOME / ".claude"
 VIEW_ALL_KEY = "__VIEW_ALL__"
 CONFIRM_ALL_KEY = "__CONFIRM_ALL__"
 DENY_ALL_KEY = "__DENY_ALL__"
+PLACEHOLDER_KEY = "__PLACEHOLDER__"  # inert "nothing here yet" rows
 
 KEY_DISPLAY = {
     "plus": "+",
@@ -89,10 +90,30 @@ def display_key(key: str) -> str:
     return KEY_DISPLAY.get(key, key)
 
 
+DEBUG_FILE = SENTRY_DIR / "debug.log"
+_DEBUG_MAX_BYTES = 1 * 1024 * 1024
+
+
+def debug_log(where: str, exc: BaseException) -> None:
+    """Record a swallowed error so failures aren't completely invisible.
+    Fail-silent and size-capped — never let logging break the UI."""
+    try:
+        SENTRY_DIR.mkdir(parents=True, exist_ok=True)
+        if DEBUG_FILE.exists() and DEBUG_FILE.stat().st_size > _DEBUG_MAX_BYTES:
+            DEBUG_FILE.write_text("", encoding="utf-8")
+        ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with DEBUG_FILE.open("a", encoding="utf-8") as f:
+            f.write(f"{ts} tui {where}: {type(exc).__name__}: {exc}\n")
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Event log helpers
 
 def load_events() -> list[dict]:
+    """Full read of the log (used by the inventory window and as a fallback).
+    The sidebar uses EventLog for cheap incremental reads instead."""
     if not LOG_FILE.exists():
         return []
     out: list[dict] = []
@@ -106,9 +127,55 @@ def load_events() -> list[dict]:
                     out.append(json.loads(line))
                 except Exception:
                     continue
-    except Exception:
+    except Exception as exc:
+        debug_log("load_events", exc)
         return []
     return out
+
+
+class EventLog:
+    """Incremental reader for events.jsonl: each call reads only the bytes
+    appended since last time, instead of re-parsing the whole file every tick.
+
+    Tracks a byte offset (binary mode, so it lines up with the file size) and
+    buffers any trailing partial line until its newline arrives. If the file
+    shrank (the hook trimmed it, or it was deleted), it transparently full-reloads."""
+
+    def __init__(self) -> None:
+        self._events: list[dict] = []
+        self._offset = 0
+        self._buf = ""
+
+    def read(self) -> list[dict]:
+        try:
+            size = LOG_FILE.stat().st_size if LOG_FILE.exists() else 0
+        except Exception as exc:
+            debug_log("EventLog.stat", exc)
+            return self._events
+        if size < self._offset:  # trimmed / rotated / deleted → start over
+            self._events, self._offset, self._buf = [], 0, ""
+        if size == self._offset:
+            return self._events
+        try:
+            with LOG_FILE.open("rb") as f:
+                f.seek(self._offset)
+                chunk = f.read()
+                self._offset = f.tell()
+        except Exception as exc:
+            debug_log("EventLog.read", exc)
+            return self._events
+        data = self._buf + chunk.decode("utf-8", errors="replace")
+        parts = data.split("\n")
+        self._buf = parts.pop()  # trailing partial line (or "" if clean)
+        for line in parts:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                self._events.append(json.loads(line))
+            except Exception:
+                continue
+        return self._events
 
 
 def parse_ts(s: str) -> datetime:
@@ -249,6 +316,17 @@ def truncate_left(s: str, width: int) -> str:
     if width == 1:
         return "…"
     return "…" + s[-(width - 1):]
+
+
+def truncate_right(s: str, width: int) -> str:
+    """Truncate `s` to `width`, keeping the START (for sentences/messages)."""
+    if width <= 0:
+        return ""
+    if len(s) <= width:
+        return s
+    if width == 1:
+        return "…"
+    return s[: width - 1] + "…"
 
 
 def wrap_paragraphs(text: str, width: int) -> str:
@@ -1349,6 +1427,7 @@ class SentryApp(App):
         mode = cfg.get("path_mode", "full")
         self._path_mode = mode if mode in PATH_MODES else "full"
         self._cols_ready = False  # set once on_mount has added columns
+        self._eventlog = EventLog()  # incremental reader for the 2s refresh
 
     def set_path_mode(self, mode: str) -> None:
         if mode not in PATH_MODES:
@@ -1620,12 +1699,16 @@ class SentryApp(App):
         tw = int(getattr(table.size, "width", 0) or 0)
         if tw <= 0:
             aw = int(getattr(self.size, "width", 0) or 0)
-            tw = max(0, aw - 2)  # #top/#bottom round border = 1 col each side
+            # Inner table width = app width − round border (2) − tab/pane chrome
+            # (2). Used only before a hidden tab has been laid out.
+            tw = max(0, aw - 4)
         if tw <= 0:
-            tw = 60
+            tw = 56
         padding = 2 * ncols
-        # -1 safety so the cursor/edge never tips us into a scrollbar.
-        return max(6, tw - fixed - padding - 1)
+        # -3 safety: covers the column gutter the cursor reserves plus a margin,
+        # so a row never tips the table into a horizontal scrollbar. Floor of 4
+        # keeps it fitting even in a very narrow pane (names just truncate hard).
+        return max(4, tw - fixed - padding - 3)
 
     def _fix_col_width(self, table: DataTable, key: str, width: int) -> None:
         """Pin a column to an exact width so DataTable can't auto-expand it
@@ -1644,7 +1727,7 @@ class SentryApp(App):
         self.refresh_data(force=True)
 
     def refresh_data(self, force: bool = False) -> None:
-        evts = load_events()
+        evts = self._eventlog.read()  # incremental: only parses new lines
         # Cheap signature so we don't redraw (and flash) when nothing changed.
         sig = (len(evts), evts[-1].get("ts") if evts else "", self.size.width)
         if not force and sig == getattr(self, "_last_sig", None):
@@ -1696,6 +1779,11 @@ class SentryApp(App):
         self._fix_col_width(table, "name", name_w)
         for name, n in rows:
             table.add_row(truncate_left(name, name_w), str(n), key=f"tool::{name}")
+        if not rows:
+            table.add_row(
+                Text(truncate_right("no tools used this session yet", name_w),
+                     style="dim italic"),
+                "", key=PLACEHOLDER_KEY)
         try:
             pane = self.query_one("#tools-tab", TabPane)
             pane.label = f"Tools ({len(counts)})"  # type: ignore[assignment]
@@ -1745,6 +1833,14 @@ class SentryApp(App):
         # Fixed columns: act=3, rm=4, ad=4, when=4 → 15. 5 columns total.
         file_w = self._avail_width(table, fixed=15, ncols=5)
         self._fix_col_width(table, "file", file_w)
+
+        if not rows:
+            msg = ("No activity yet — keep using Claude"
+                   if self.session_id else
+                   "No activity yet. Press l to link a session.")
+            table.add_row("", Text(truncate_right(msg, file_w), style="dim italic"),
+                          "", "", "", key=PLACEHOLDER_KEY)
+            return
 
         for rec in rows:
             path = rec["path"]
@@ -1831,6 +1927,11 @@ class SentryApp(App):
                 str(rec["all"]).center(4) if rec["all"] else "",
                 key=f"{kind}::{name}",
             )
+
+        if shown == 0:
+            none = f"no {label.lower()} used this session yet"
+            table.add_row(Text(truncate_right(none, name_w), style="dim italic"),
+                          "", "", "", key=PLACEHOLDER_KEY)
 
         try:
             pane = self.query_one(f"#{tab_id}", TabPane)

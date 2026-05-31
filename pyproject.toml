@@ -11,7 +11,9 @@ requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "trob9" }]
 dependencies = [
-    "textual>=0.86.0",
+    # Upper bound: Textual changes its widget/CSS API across major versions,
+    # which can break the custom widgets here. Allow 0.86+ through the 8.x line.
+    "textual>=0.86,<9",
 ]
 
 [project.scripts]
