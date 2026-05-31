@@ -248,6 +248,22 @@ Linux.
 terminal. On Windows Terminal the auto-dock hook does this; elsewhere, split your
 terminal manually and run `claude-sentry` in the new pane.
 
+### Kitty setup
+
+Kitty has no built-in way to drag the split edge — you resize via keybinds. Add
+to `~/.config/kitty/kitty.conf`:
+
+```
+enabled_layouts splits,stack
+
+map cmd+alt+right resize_window wider 5
+map cmd+alt+left  resize_window narrower 5
+```
+
+Then reload with `ctrl+shift+f5`. Focus the claude-sentry pane and press
+`cmd+alt+right` to widen it (5 columns per press), `cmd+alt+left` to narrow.
+On Linux swap `cmd` for `ctrl`.
+
 ---
 
 ## Development
