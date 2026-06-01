@@ -48,6 +48,28 @@ from functools import partial
 
 from rich.text import Text
 
+from .core import (
+    SENTRY_DIR,
+    LOG_FILE,
+    CONFIG_FILE,
+    CONFIRM_FILE,
+    CLAUDE_DIR,
+    HOME,
+    NATIVE_COMMANDS,
+    NATIVE_AGENTS,
+    DOCS_COMMANDS,
+    DOCS_AGENTS,
+    confirm_keys,
+    deny_keys,
+    find_skill_or_agent_file,
+    is_native,
+    load_confirmations,
+    load_events,
+    native_doc_url,
+    parse_ts,
+    save_confirmations,
+)
+
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -59,14 +81,9 @@ from textual.widget import Widget
 from textual.widgets import Button, DataTable, Input, Static, TabbedContent, TabPane
 
 # ---------------------------------------------------------------------------
-# Paths & constants
+# Paths & constants (sentry/claude paths now live in .core — re-imported above)
 
-SENTRY_DIR = Path(os.path.expanduser("~/.claude/sentry"))
-LOG_FILE = SENTRY_DIR / "events.jsonl"
-CONFIG_FILE = SENTRY_DIR / "config.json"
 WIN_SESSION_DIR = SENTRY_DIR / "win-session"
-HOME = Path.home()
-CLAUDE_DIR = HOME / ".claude"
 
 VIEW_ALL_KEY = "__VIEW_ALL__"
 CONFIRM_ALL_KEY = "__CONFIRM_ALL__"
@@ -109,29 +126,8 @@ def debug_log(where: str, exc: BaseException) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Event log helpers
-
-def load_events() -> list[dict]:
-    """Full read of the log (used by the inventory window and as a fallback).
-    The sidebar uses EventLog for cheap incremental reads instead."""
-    if not LOG_FILE.exists():
-        return []
-    out: list[dict] = []
-    try:
-        with LOG_FILE.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    out.append(json.loads(line))
-                except Exception:
-                    continue
-    except Exception as exc:
-        debug_log("load_events", exc)
-        return []
-    return out
-
+# Event log helpers (load_events lives in .core; EventLog stays here because it
+# carries TUI-specific incremental-read state).
 
 class EventLog:
     """Incremental reader for events.jsonl: each call reads only the bytes
@@ -176,16 +172,6 @@ class EventLog:
             except Exception:
                 continue
         return self._events
-
-
-def parse_ts(s: str) -> datetime:
-    try:
-        dt = datetime.fromisoformat(s)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except Exception:
-        return datetime.now(timezone.utc)
 
 
 def relative_time(ts: datetime) -> str:
@@ -527,75 +513,8 @@ def discover_agents() -> list[dict]:
     return sorted(seen.values(), key=lambda d: d["name"].lower())
 
 
-def find_skill_or_agent_file(kind: str, name: str) -> Path | None:
-    """Resolve a recorded skill/agent name back to its source file."""
-    if ":" in name:
-        _, name = name.split(":", 1)
-    if kind == "agent":
-        candidates = [CLAUDE_DIR / "agents" / f"{name}.md"]
-        for p in CLAUDE_DIR.glob(f"plugins/**/agents/{name}.md"):
-            return p
-    else:
-        candidates = [
-            CLAUDE_DIR / "skills" / name / "SKILL.md",
-            CLAUDE_DIR / "commands" / f"{name}.md",
-        ]
-        for p in CLAUDE_DIR.glob(f"plugins/**/skills/{name}/SKILL.md"):
-            return p
-    for c in candidates:
-        if c.exists():
-            return c
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Claude-native built-ins. These ship inside Claude Code (no file on disk), so
-# we recognise them out of the box instead of dumping them in the review queue.
-# Source: https://code.claude.com/docs/en/commands  (built-in commands +
-# bundled skills) and https://code.claude.com/docs/en/sub-agents (agents).
-
-NATIVE_COMMANDS = {
-    "add-dir", "agents", "allowed-tools", "android", "app", "background",
-    "bashes", "batch", "bg", "branch", "btw", "bug", "checkpoint", "chrome",
-    "clear", "code-review", "compact", "config", "context", "continue",
-    "cost", "debug", "desktop", "diff", "doctor", "effort", "exit",
-    "extra-usage", "feedback", "fewer-permission-prompts", "focus", "fork",
-    "heapdump", "help", "hooks", "ide", "init", "insights",
-    "install-github-app", "install-slack-app", "ios", "keybindings", "login",
-    "logout", "mcp", "memory", "mobile", "model", "new", "passes",
-    "permissions", "plan", "plugin", "powerup", "privacy-settings",
-    "proactive", "quit", "radio", "rc", "recap", "release-notes",
-    "reload-plugins", "reload-skills", "remote-control", "remote-env", "reset",
-    "resume", "review", "rewind", "routines", "run", "run-skill-generator",
-    "sandbox", "schedule", "scroll-speed", "security-review", "settings",
-    "setup-bedrock", "setup-vertex", "share", "simplify", "skills", "stats",
-    "status", "statusline", "stickers", "stop", "tasks", "team-onboarding",
-    "teleport", "terminal-setup", "theme", "tp", "ultrareview", "undo",
-    "upgrade", "usage", "usage-credits", "verify", "vim", "claude-api", "loop",
-    "deep-research", "fast", "goal", "workflows",
-}
-
-# Built-in subagent types Claude Code ships with (case-insensitive).
-NATIVE_AGENTS = {"general-purpose", "explore", "plan", "claude"}
-
-DOCS_COMMANDS = "https://code.claude.com/docs/en/commands"
-DOCS_AGENTS = "https://code.claude.com/docs/en/sub-agents"
-
-
-def is_native(kind: str, name: str) -> bool:
-    bare = name.split(":", 1)[-1]
-    if kind == "agent":
-        return bare.lower() in NATIVE_AGENTS
-    return bare in NATIVE_COMMANDS
-
-
-def native_doc_url(kind: str, name: str) -> str:
-    """A deep link to the Claude docs that highlights this command/agent."""
-    bare = name.split(":", 1)[-1]
-    if kind == "agent":
-        return DOCS_AGENTS
-    # Text fragment (#:~:text=) scrolls to and highlights the command on load.
-    return f"{DOCS_COMMANDS}#:~:text=%2F{bare}"
+# (find_skill_or_agent_file, NATIVE_COMMANDS/AGENTS, is_native, native_doc_url
+# all live in .core — re-imported above so callers below see them unchanged.)
 
 
 # ---------------------------------------------------------------------------
@@ -616,52 +535,8 @@ def save_config(cfg: dict) -> None:
         pass
 
 
-# ---------------------------------------------------------------------------
-# Confirmations — the user's permanent confirm/deny decisions for skills/agents
-# that aren't backed by a file on disk (built-ins, plugins we can't resolve,
-# typos). Keyed "kind::name", e.g. "skill::verify", "agent::general-purpose".
-
-CONFIRM_FILE = SENTRY_DIR / "confirmations.json"
-
-
-def load_confirmations() -> dict:
-    try:
-        data = json.loads(CONFIRM_FILE.read_text(encoding="utf-8"))
-        return {
-            "confirmed": set(data.get("confirmed", [])),
-            "denied": set(data.get("denied", [])),
-        }
-    except Exception:
-        return {"confirmed": set(), "denied": set()}
-
-
-def save_confirmations(state: dict) -> None:
-    try:
-        SENTRY_DIR.mkdir(parents=True, exist_ok=True)
-        CONFIRM_FILE.write_text(
-            json.dumps(
-                {"confirmed": sorted(state["confirmed"]),
-                 "denied": sorted(state["denied"])},
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
-
-
-def confirm_keys(keys: set[str]) -> None:
-    state = load_confirmations()
-    state["confirmed"] |= keys
-    state["denied"] -= keys
-    save_confirmations(state)
-
-
-def deny_keys(keys: set[str]) -> None:
-    state = load_confirmations()
-    state["denied"] |= keys
-    state["confirmed"] -= keys
-    save_confirmations(state)
+# (Confirmations live in .core — load/save/confirm/deny + CONFIRM_FILE are
+# imported at the top.)
 
 
 # ---------------------------------------------------------------------------
