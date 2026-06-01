@@ -9,7 +9,11 @@ edits, skill and agent it runs, and tool it calls, so you never scroll back
 through the transcript to find out what changed.
 
 ```bash
-pipx install git+https://github.com/trob9/claude-sentry.git && claude-sentry-install
+# Full install — sidebar TUI + audit CLIs
+pipx install 'git+https://github.com/trob9/claude-sentry.git[tui]' && claude-sentry-install
+
+# Lightweight install — audit CLIs only, no TUI dependency
+pipx install 'git+https://github.com/trob9/claude-sentry.git' && claude-sentry-install --audit-only
 ```
 <img width="1946" height="1073" alt="claude-sentry" src="https://github.com/user-attachments/assets/9f4bded0-9e19-4803-8c4d-e473a230dbcd" />
 
@@ -95,23 +99,30 @@ isolates the app and guarantees the commands land on your `PATH`.)
 ### 1. Install the package
 
 ```bash
-pipx install git+https://github.com/trob9/claude-sentry.git
+pipx install 'git+https://github.com/trob9/claude-sentry.git[tui]'
 ```
 
 > Not on PyPI yet — installing straight from GitHub works today. Once published,
-> this becomes `pipx install claude-sentry`.
+> this becomes `pipx install 'claude-sentry[tui]'`.
 
-This puts four commands on your `PATH`:
+The `[tui]` extra pulls in [Textual](https://textual.textualize.io/) for the
+sidebar. Skip it (`pipx install 'git+...'` with no extra) to install just the
+event log + audit CLIs — see [**Lightweight install (audit only)**](#lightweight-install-audit-only) below.
 
-| Command | What it is |
-|---|---|
-| `claude-sentry` | the sidebar TUI you run |
-| `claude-sentry-hook` | the logging hook Claude runs (you don't run this yourself) |
-| `claude-sentry-launch` | the auto-dock hook (Windows Terminal only) |
-| `claude-sentry-install` | wires the hooks into your Claude settings |
+This puts these commands on your `PATH`:
 
-(Plain `pip install git+https://github.com/trob9/claude-sentry.git` also works
-if you manage your own environment — just make sure the four commands land on
+| Command | What it is | Needs `[tui]` |
+|---|---|:-:|
+| `claude-sentry` | the sidebar TUI you run | ✅ |
+| `claude-sentry-hook` | the logging hook Claude runs (you don't run this yourself) | – |
+| `claude-sentry-launch` | the auto-dock hook (Windows Terminal only) | – |
+| `claude-sentry-install` | wires the hooks into your Claude settings | – |
+| `claude-sentry-report` | print a usage audit of the log (last 30 days by default) | – |
+| `claude-sentry-confirm` | mark an unresolved skill/agent as real (headless ✓) | – |
+| `claude-sentry-deny` | dismiss an unresolved skill/agent (headless ✗) | – |
+
+(Plain `pip install 'git+https://github.com/trob9/claude-sentry.git[tui]'` also
+works if you manage your own environment — just make sure the commands land on
 your `PATH`.)
 
 ### 2. Register the hooks
@@ -149,6 +160,74 @@ The installer is idempotent — running it twice does nothing the second time.
 ```bash
 claude-sentry-install --uninstall   # removes the hooks
 pipx uninstall claude-sentry        # removes the commands
+```
+
+---
+
+## Lightweight install (audit only)
+
+Don't want the sidebar — just the data? Skip the `[tui]` extra and pass
+`--audit-only` when registering the hooks:
+
+```bash
+pipx install 'git+https://github.com/trob9/claude-sentry.git'
+claude-sentry-install --audit-only
+```
+
+You get:
+
+- the same `~/.claude/sentry/events.jsonl` log of every Edit / Write / Bash /
+  Skill / Agent / Tool / slash-command call,
+- `claude-sentry-report` for a periodic audit,
+- `claude-sentry-confirm` / `claude-sentry-deny` for headless triage of
+  unrecognised skill/agent names,
+
+…and **no** TUI, no Textual dependency, no auto-launched sidebar pane.
+
+### Audit your usage
+
+```bash
+claude-sentry-report               # last 30 days, human-readable
+claude-sentry-report --days 7      # last 7 days
+claude-sentry-report --all         # all-time, no window column
+claude-sentry-report --json        # machine-readable (good for cron + jq)
+```
+
+The report lists **unresolved** items first (anything that looks like a skill
+or agent but isn't installed on disk and isn't a Claude built-in), then real
+Skills / Agents / Tools usage sorted by all-time count.
+
+### Triage unresolved items
+
+These need a one-time decision — confirm them so they roll into the real counts,
+or deny them so they stop showing up:
+
+```bash
+claude-sentry-confirm --list           # show what's unresolved (no changes)
+claude-sentry-confirm my-skill         # confirm a single name
+claude-sentry-confirm skill::my-skill  # use kind:: prefix if ambiguous
+claude-sentry-confirm --all            # confirm everything pending
+claude-sentry-deny    /tset            # dismiss a typo
+```
+
+Decisions are saved to `~/.claude/sentry/confirmations.json` — the same file
+the sidebar uses, so if you later install `[tui]` your existing decisions
+carry over.
+
+### Audit on a schedule
+
+A simple monthly cron entry:
+
+```cron
+# 1st of every month at 9am — mail me a usage audit for the previous 30 days
+0 9 1 * * /usr/local/bin/claude-sentry-report --days 30 | mail -s "claude usage audit" me@example.com
+```
+
+Or pipe `--json` into `jq` to flag skills you haven't run in the last 30 days:
+
+```bash
+claude-sentry-report --json --days 30 | \
+  jq -r '.skills.real | to_entries[] | select(.value.window == 0) | .key'
 ```
 
 ---
@@ -270,13 +349,23 @@ On Linux swap `cmd` for `ctrl`.
 
 ```bash
 git clone https://github.com/trob9/claude-sentry.git && cd claude-sentry
-python -m venv .venv && .venv/bin/pip install -e .   # Windows: .venv\Scripts\pip
+python -m venv .venv && .venv/bin/pip install -e '.[tui]'   # drop [tui] for audit-only dev
 claude-sentry-install
 ```
 
 With an editable install (`-e`), edits to `claude_sentry/` take effect on the
-next launch. The app is a single module, `claude_sentry/app.py`; the hooks are
-`hook.py` and `launch_hook.py`; the settings wiring is `install.py`.
+next launch. Module layout:
+
+| File | Role |
+|---|---|
+| `claude_sentry/core.py` | pure-Python primitives (paths, event loader, native built-ins, confirmations, aggregation) — zero deps, shared by everything below |
+| `claude_sentry/app.py` | the sidebar TUI (imports `core`, requires `[tui]`) |
+| `claude_sentry/hook.py` | the logging hook Claude runs after every tool call |
+| `claude_sentry/launch_hook.py` | the Windows-Terminal auto-dock hook |
+| `claude_sentry/install.py` | wires the hooks into `~/.claude/settings.json` |
+| `claude_sentry/report.py` | `claude-sentry-report` audit CLI |
+| `claude_sentry/triage.py` | `claude-sentry-confirm` / `claude-sentry-deny` CLIs |
+| `claude_sentry/_tui_entry.py` | shim that prints a friendly error if `[tui]` isn't installed |
 
 ---
 

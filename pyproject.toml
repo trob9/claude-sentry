@@ -4,23 +4,32 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "claude-sentry"
-version = "0.1.0"
-description = "A sidebar TUI showing what the active Claude Code session is touching: live edits, skill/agent usage, and tool calls."
+version = "0.2.0"
+description = "Audit what Claude Code is doing — live sidebar TUI plus headless audit/report CLIs."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "trob9" }]
-dependencies = [
-    # Upper bound: Textual changes its widget/CSS API across major versions,
-    # which can break the custom widgets here. Allow 0.86+ through the 8.x line.
+# Core install is dependency-free: the hook + audit-only CLIs are pure stdlib.
+# Install the `tui` extra to also get the sidebar (see [project.optional-dependencies]).
+dependencies = []
+
+[project.optional-dependencies]
+# Sidebar TUI deps. `pipx install 'claude-sentry[tui]'` to get the sidebar.
+# Upper bound on textual: it changes its widget/CSS API across major versions,
+# which can break the custom widgets here. Allow 0.86+ through the 8.x line.
+tui = [
     "textual>=0.86,<9",
 ]
 
 [project.scripts]
-claude-sentry = "claude_sentry.app:main"
+claude-sentry = "claude_sentry._tui_entry:main"
 claude-sentry-hook = "claude_sentry.hook:main"
 claude-sentry-launch = "claude_sentry.launch_hook:main"
 claude-sentry-install = "claude_sentry.install:main"
+claude-sentry-report = "claude_sentry.report:main"
+claude-sentry-confirm = "claude_sentry.triage:confirm_main"
+claude-sentry-deny = "claude_sentry.triage:deny_main"
 
 [tool.setuptools.packages.find]
 include = ["claude_sentry*"]

@@ -1,9 +1,13 @@
 """claude-sentry-install: idempotently wire claude-sentry's hooks into
 ~/.claude/settings.json.
 
-Run with `--uninstall` to remove them. Run with `--no-launcher` on Windows to
-skip the SessionStart auto-launch hook (you'll start the sidebar by running
-`claude-sentry` yourself).
+Flags:
+  --uninstall    Remove all claude-sentry hooks from settings.json.
+  --no-launcher  Skip the SessionStart auto-launch hook (Windows only).
+  --audit-only   Lightweight install: skip the launcher hook AND print a hint
+                 pointing the user at claude-sentry-report / -confirm / -deny
+                 instead of the sidebar TUI. Use this when you only want the
+                 background event log + monthly auditing, with no TUI.
 """
 from __future__ import annotations
 
@@ -77,7 +81,7 @@ def _remove_hook(entries: list, matcher: str, cmd: str) -> bool:
     return removed
 
 
-def install(with_launcher: bool) -> None:
+def install(with_launcher: bool, audit_only: bool = False) -> None:
     cfg = _load()
     hooks = cfg.setdefault("hooks", {})
     added: list[str] = []
@@ -102,6 +106,14 @@ def install(with_launcher: bool) -> None:
     else:
         print("All hooks already installed — nothing to do.")
     print(f"\nSettings file: {SETTINGS}")
+    if audit_only:
+        print(
+            "\nAudit-only mode — no sidebar will launch. Useful commands:\n"
+            "  claude-sentry-report          # last 30 days of skill/agent/tool usage\n"
+            "  claude-sentry-report --days 7 # last 7 days\n"
+            "  claude-sentry-confirm <name>  # mark an unconfirmed item as real\n"
+            "  claude-sentry-deny <name>     # dismiss an unconfirmed item (typo, etc.)"
+        )
 
 
 def uninstall() -> None:
@@ -131,11 +143,17 @@ def main() -> None:
                    help="Remove claude-sentry's hooks from settings.json.")
     p.add_argument("--no-launcher", action="store_true",
                    help="Skip the SessionStart auto-launch hook (Windows only).")
+    p.add_argument("--audit-only", action="store_true",
+                   help="Lightweight install: skip the launcher hook and print "
+                        "hints for the report/confirm/deny CLIs instead of the TUI.")
     args = p.parse_args()
     if args.uninstall:
         uninstall()
     else:
-        install(with_launcher=not args.no_launcher)
+        # --audit-only implies --no-launcher (the launcher only makes sense
+        # alongside the sidebar TUI).
+        with_launcher = not (args.no_launcher or args.audit_only)
+        install(with_launcher=with_launcher, audit_only=args.audit_only)
 
 
 if __name__ == "__main__":
