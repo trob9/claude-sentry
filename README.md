@@ -320,20 +320,27 @@ break a tool call), so an empty pane usually means one of:
 
 ## Platform notes
 
-| Terminal | TUI | Logging hook | Auto-dock + auto-link |
-|---|---|---|---|
-| **Windows Terminal** | ✅ | ✅ | ✅ built-in (`claude-sentry-launch`) |
-| **Kitty** (macOS / Linux) | ✅ | ✅ | ✅ via [`examples/kitty/`](examples/kitty/) launcher |
-| **Other** (Terminal.app, iTerm2, gnome-terminal, …) | ✅ | ✅ | ➖ run `claude-sentry` yourself |
+The TUI and the logging hook work in every terminal on every OS — they're just
+Python. What varies between terminals is **whether you can dock claude-sentry
+as a side pane** in the same window as Claude. That depends on the terminal,
+not the OS.
+
+| Terminal | Native splits | Auto-dock + auto-link |
+|---|---|---|
+| **Windows Terminal** | yes | ✅ built-in (`claude-sentry-launch`) |
+| **Kitty** (macOS / Linux) | yes | ✅ via [`examples/kitty/`](examples/kitty/) |
+| **iTerm2** (macOS) | yes | possible — no example shipped yet |
+| **tmux / zellij / screen** (inside any terminal) | yes | possible — no example shipped yet |
+| **Terminal.app** (macOS), **gnome-terminal** | **no** | use two windows side-by-side, or run `tmux`/`zellij` inside it |
+
+If your terminal has no native splits and you don't want a multiplexer, just
+run `claude-sentry` in a second window next to Claude — auto-link via
+`CLAUDE_SENTRY_LINK_ID` still works regardless of how the panes are laid out.
 
 Open-with-default and reveal-in-file-manager are wired per OS: `os.startfile` on
 Windows, `open` / `open -R` on macOS, `xdg-open` on Linux. The inventory window
 spawns via Windows Terminal, `osascript` on macOS, or a detected terminal on
 Linux.
-
-**Best layout:** dock claude-sentry as a narrow (~25%) pane on the right of your
-terminal. On Windows Terminal the auto-dock hook does this; elsewhere, split your
-terminal manually and run `claude-sentry` in the new pane.
 
 ### Kitty setup
 
