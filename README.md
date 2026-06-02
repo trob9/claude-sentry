@@ -382,9 +382,11 @@ falls back to the normal manual-link behaviour.
 sessions never cross. Two windows on the *same* session will both show the
 merged tool activity (same `session_id` in the log).
 
-**Reference implementation for Kitty (macOS/Linux):** see
-[`examples/kitty/`](examples/kitty/) for a ready-to-use launcher script and a
-SessionStart hook snippet you can paste into your existing hook file.
+**Reference implementations** live under [`examples/`](examples/) — currently
+Kitty (macOS/Linux) and iTerm2 (macOS), plus the shared SessionStart hook
+snippet you paste into your existing hook file. See
+[`examples/README.md`](examples/README.md) for setup steps, the full contract,
+and notes on writing your own launcher for another terminal.
 
 ---
 
