@@ -18,15 +18,22 @@ STATE_DIR="$HOME/.claude/state/sentry-links"
 STATE_FILE="$STATE_DIR/$SENTRY_LINK_ID.json"
 mkdir -p "$STATE_DIR"
 
-# Snapshot env vars needed by both panes
+# Snapshot env vars both panes should inherit. Each is only forwarded if it's
+# actually set in your shell — entries that aren't set are silently skipped,
+# so it's safe to extend this list with anything Claude needs from your shell
+# that wouldn't otherwise reach a freshly-spawned child shell.
+#   ANTHROPIC_MODEL                       — only if you pin a non-default model
+#   HTTP_PROXY / HTTPS_PROXY / ALL_PROXY  — only if you're behind a proxy
+#   *_proxy (lowercase variants)          — same, for tools that read lowercase
+# If you use Vertex AI, a custom CA bundle, NVM for node, etc., add those
+# variable names here too.
 ENV_FILE="$TMPDIR_BASE/env.sh"
 {
     echo "#!/bin/zsh"
     echo "export PATH=$HOME/.local/bin:\$PATH"
-    for var in ANTHROPIC_MODEL NVM_DIR HOME \
-               HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy \
-               CLOUDSDK_PROXY_TYPE CLOUDSDK_PROXY_PORT CLOUDSDK_PROXY_ADDRESS \
-               REQUESTS_CA_BUNDLE CURL_CA_BUNDLE SSL_CERT_FILE NODE_EXTRA_CA_CERTS; do
+    for var in ANTHROPIC_MODEL \
+               HTTP_PROXY HTTPS_PROXY ALL_PROXY \
+               http_proxy https_proxy all_proxy; do
         val="${!var}"
         [[ -n "$val" ]] && printf 'export %s=%q\n' "$var" "$val"
     done
