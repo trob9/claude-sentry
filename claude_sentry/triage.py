@@ -25,8 +25,11 @@ from collections import Counter
 from .core import (
     confirm_keys,
     deny_keys,
+    find_skill_or_agent_file,
+    is_native,
     load_confirmations,
     load_events,
+    rename_key,
     status_of,
 )
 
@@ -141,3 +144,58 @@ def confirm_main() -> None:
 
 def deny_main() -> None:
     _run("deny")
+
+
+def rename_main() -> None:
+    """claude-sentry-rename OLD NEW — alias a renamed skill/agent.
+
+    Maps OLD events to NEW in reports and the TUI. NEW must be installed on
+    disk or be a native built-in (same check the TUI's ↻ modal performs).
+
+    Usage:
+      claude-sentry-rename review-pr pr-review
+      claude-sentry-rename skill::review-pr pr-review   # explicit kind
+    """
+    import argparse
+    p = argparse.ArgumentParser(
+        prog="claude-sentry-rename",
+        description="Map an old skill/agent name to its new canonical name.",
+    )
+    p.add_argument("old", help="Old name (e.g. review-pr or skill::review-pr)")
+    p.add_argument("new", help="New canonical name (must be installed or native)")
+    args = p.parse_args()
+
+    old_token: str = args.old
+    new_name: str = args.new.lstrip("/")
+
+    # Resolve kind from old token
+    if "::" in old_token:
+        kind, _, bare_old = old_token.partition("::")
+        if kind not in ("skill", "agent"):
+            sys.exit(f"claude-sentry-rename: unknown kind '{kind}' — must be skill or agent")
+    else:
+        bare_old = old_token
+        # Infer kind from what's in the log
+        events_ = load_events()
+        kinds_seen = {e.get("type") for e in events_ if e.get("target") == bare_old}
+        skill_seen = "skill" in kinds_seen
+        agent_seen = "agent" in kinds_seen
+        if skill_seen and agent_seen:
+            sys.exit(
+                f"claude-sentry-rename: '{bare_old}' appears as both skill and agent.\n"
+                f"  Re-run with explicit kind: skill::{bare_old} or agent::{bare_old}"
+            )
+        kind = "agent" if agent_seen else "skill"
+
+    old_key = f"{kind}::{bare_old}"
+
+    # Validate new name exists
+    if not (find_skill_or_agent_file(kind, new_name) is not None or is_native(kind, new_name)):
+        kind_label = "skill" if kind == "skill" else "agent"
+        sys.exit(
+            f"claude-sentry-rename: {kind_label} \"{new_name}\" not found.\n"
+            f"  Check it matches a command in ~/.claude/commands/ or is a native built-in."
+        )
+
+    rename_key(old_key, new_name)
+    print(f"  ↻ Renamed: {old_key} → {new_name}")

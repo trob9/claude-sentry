@@ -68,6 +68,7 @@ from .core import (
     load_events,
     native_doc_url,
     parse_ts,
+    rename_key,
     save_confirmations,
 )
 
@@ -1181,6 +1182,115 @@ class LinkSession(ModalScreen[str]):
         self.dismiss("")  # click outside cancels
 
 
+class RenameModal(ModalScreen[str]):
+    """Rename an unconfirmed skill/agent to its new canonical name.
+
+    Validates that the new name exists on disk or is a native built-in before
+    dismissing. Same visual style as LinkSession: transparent backdrop, round
+    accent border, inline error, Esc/click-outside to cancel.
+    """
+
+    INPUT_WIDTH = 36
+
+    DEFAULT_CSS = """
+    RenameModal { align: center middle; background: $surface 0%; }
+    RenameModal > #wrap {
+        background: $panel;
+        border: round $accent;
+        padding: 0 1;
+        width: auto;
+        height: auto;
+    }
+    RenameModal .head  { text-style: bold; padding: 1 0 0 0; height: auto; }
+    RenameModal .hint  { color: $text-muted; padding: 1 0; height: auto; }
+    RenameModal Input  { margin: 0 0 1 0; }
+    RenameModal .error { color: $error; height: auto; padding: 0 0 1 0; }
+    RenameModal .item  { width: 100%; height: 1; padding: 0 1; color: $text; }
+    RenameModal .item.-selected { background: $accent; }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel", show=False),
+        Binding("enter",  "submit", "Rename", show=False),
+    ]
+
+    def __init__(self, kind: str, old_name: str) -> None:
+        super().__init__()
+        self._kind = kind
+        self._old_name = old_name
+
+    def compose(self) -> ComposeResult:
+        label = "skill" if self._kind == "skill" else "agent"
+        hint = wrap_paragraphs(
+            f"Enter the new {label} name (without leading /).\n"
+            "It must be installed on disk or be a native built-in.",
+            self.INPUT_WIDTH,
+        )
+        with Vertical(id="wrap"):
+            yield Static(f"↻  Rename  {self._old_name}", classes="head")
+            yield Static(hint, classes="hint")
+            yield Input(placeholder=f"new {label} name…", id="name")
+            yield Static("", id="error", classes="error")
+            yield Static("▸ Rename", id="ok",     classes="item")
+            yield Static("▸ Cancel", id="cancel", classes="item")
+
+    def on_mount(self) -> None:
+        hint_lines = self.query_one(".hint", Static).renderable
+        w = max(
+            len(f"↻  Rename  {self._old_name}"),
+            len("▸ Rename"),
+            self.INPUT_WIDTH,
+        )
+        self.query_one("#wrap").styles.width = w + 4
+        self.query_one("#name", Input).focus()
+
+    def action_cancel(self) -> None:
+        self.dismiss("")
+
+    def _try_submit(self) -> None:
+        val = self.query_one("#name", Input).value.strip().lstrip("/")
+        if not val:
+            self.dismiss("")
+            return
+        if val == self._old_name:
+            self.query_one("#error", Static).update("⚠  Same name — enter a different one.")
+            self.query_one("#name", Input).focus()
+            return
+        exists = (find_skill_or_agent_file(self._kind, val) is not None
+                  or is_native(self._kind, val))
+        if not exists:
+            kind_label = "skill" if self._kind == "skill" else "agent"
+            self.query_one("#error", Static).update(
+                f"⚠  {kind_label} \"{val}\" not found — check it matches "
+                "a command installed in ~/.claude/commands/ or is a "
+                "native built-in."
+            )
+            self.query_one("#name", Input).focus()
+            return
+        self.dismiss(val)
+
+    def action_submit(self) -> None:
+        self._try_submit()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._try_submit()
+
+    def on_click(self, event: events.Click) -> None:
+        nid = getattr(event.widget, "id", None) if event.widget is not None else None
+        if nid == "ok":
+            self._try_submit()
+            return
+        if nid == "cancel":
+            self.dismiss("")
+            return
+        cur = event.widget
+        while cur is not None:
+            if getattr(cur, "id", None) == "wrap":
+                return  # inside the box
+            cur = cur.parent
+        self.dismiss("")  # click outside cancels
+
+
 class Divider(Static):
     """Single-line draggable separator. Updates app.top_height while dragged."""
 
@@ -1393,13 +1503,14 @@ class SentryApp(App):
         tools.add_column("tool", key="name")
         tools.add_column("uses", key="uses", width=5)
 
-        # Unconfirmed review queue: name | kind | seen | ✓ | ✗
+        # Unconfirmed review queue: name | kind | seen | ✓ | ✗ | ↻
         unconf = self.query_one("#unconfirmed-table", DataTable)
         unconf.add_column("name", key="name")
         unconf.add_column("kind", key="kind", width=5)
         unconf.add_column("seen", key="seen", width=4)
-        unconf.add_column("✓", key="ok", width=1)
-        unconf.add_column("✗", key="no", width=1)
+        unconf.add_column("✓", key="ok",     width=1)
+        unconf.add_column("✗", key="no",     width=1)
+        unconf.add_column("↻", key="rename", width=1)
         if self._top_height is None:
             self._top_height = max(3, self.screen.size.height // 2)
         self.query_one("#top").styles.height = self._top_height
@@ -1896,7 +2007,7 @@ class SentryApp(App):
             name = e.get("target") or ""
             if not name:
                 continue
-            if self._status_of(kind, name) != "unconfirmed":
+            if self._status_of(kind, name) not in ("unconfirmed",):
                 continue
             seen[(kind, name)] = seen.get((kind, name), 0) + 1
 
@@ -1906,22 +2017,23 @@ class SentryApp(App):
 
         table = self.query_one("#unconfirmed-table", DataTable)
         table.clear()
-        # fixed: kind=5, seen=4, ok=1, no=1 → 11; 5 columns.
-        name_w = self._avail_width(table, fixed=11, ncols=5)
+        # fixed: kind=5, seen=4, ok=1, no=1, rename=1 → 12; 6 columns.
+        name_w = self._avail_width(table, fixed=12, ncols=6)
         self._fix_col_width(table, "name", name_w)
 
         if rows:
-            table.add_row(Text("✓ Confirm all", style="green"), "", "", "", "",
+            table.add_row(Text("✓ Confirm all", style="green"), "", "", "", "", "",
                           key=CONFIRM_ALL_KEY)
-            table.add_row(Text("✗ Deny all", style="red"), "", "", "", "",
+            table.add_row(Text("✗ Deny all", style="red"), "", "", "", "", "",
                           key=DENY_ALL_KEY)
         for (kind, name), n in rows:
             table.add_row(
                 truncate_left(name, name_w),
-                kind,                      # "skill" / "agent" (col width 5)
+                kind,                           # "skill" / "agent" (col width 5)
                 str(n),
                 Text("✓", style="bold green"),
                 Text("✗", style="bold red"),
+                Text("↻", style="bold yellow"),
                 key=f"{kind}::{name}",
             )
 
@@ -2008,13 +2120,29 @@ class SentryApp(App):
             return
         if "::" not in row_key:
             return
-        # Columns: 0 name, 1 kind, 2 seen, 3 ✓, 4 ✗.
+        # Columns: 0 name, 1 kind, 2 seen, 3 ✓, 4 ✗, 5 ↻.
         if column == 3:
             confirm_keys({row_key})
             self.refresh_data(force=True)
         elif column == 4:
             deny_keys({row_key})
             self.refresh_data(force=True)
+        elif column == 5:
+            self._open_rename_modal(row_key)
+
+    def _open_rename_modal(self, row_key: str) -> None:
+        if "::" not in row_key:
+            return
+        kind, old_name = row_key.split("::", 1)
+
+        def _on_rename(new_name: str) -> None:
+            if not new_name:
+                return
+            rename_key(row_key, new_name)
+            self.notify(f"↻ {old_name} → {new_name}", timeout=2)
+            self.refresh_data(force=True)
+
+        self.push_screen(RenameModal(kind, old_name), _on_rename)
 
     def _focused_row(self) -> tuple[str, str] | None:
         for sel in ("#edits-table", "#skills-table", "#agents-table", "#tools-table"):

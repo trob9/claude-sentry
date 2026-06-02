@@ -141,10 +141,11 @@ def load_confirmations() -> dict:
         data = json.loads(CONFIRM_FILE.read_text(encoding="utf-8"))
         return {
             "confirmed": set(data.get("confirmed", [])),
-            "denied": set(data.get("denied", [])),
+            "denied":    set(data.get("denied", [])),
+            "renames":   dict(data.get("renames", {})),
         }
     except Exception:
-        return {"confirmed": set(), "denied": set()}
+        return {"confirmed": set(), "denied": set(), "renames": {}}
 
 
 def save_confirmations(state: dict) -> None:
@@ -152,8 +153,11 @@ def save_confirmations(state: dict) -> None:
         SENTRY_DIR.mkdir(parents=True, exist_ok=True)
         CONFIRM_FILE.write_text(
             json.dumps(
-                {"confirmed": sorted(state["confirmed"]),
-                 "denied": sorted(state["denied"])},
+                {
+                    "confirmed": sorted(state["confirmed"]),
+                    "denied":    sorted(state["denied"]),
+                    "renames":   state.get("renames", {}),
+                },
                 indent=2,
             ),
             encoding="utf-8",
@@ -176,15 +180,30 @@ def deny_keys(keys: set[str]) -> None:
     save_confirmations(state)
 
 
+def rename_key(old_key: str, new_name: str) -> None:
+    """Map old_key (e.g. 'skill::review-pr') to new_name ('pr-review').
+
+    The old name is removed from confirmed/denied so it no longer appears in
+    the review queue. The new name is left for status_of to resolve normally
+    (it should be verified or native — the TUI/CLI validates this first)."""
+    state = load_confirmations()
+    state.setdefault("renames", {})[old_key] = new_name
+    state["confirmed"].discard(old_key)
+    state["denied"].discard(old_key)
+    save_confirmations(state)
+
+
 # ---------------------------------------------------------------------------
 # Status classification: same rules the TUI uses, lifted into pure code so the
 # audit report agrees with what the sidebar shows.
 
 def status_of(kind: str, name: str, confirmations: dict | None = None) -> str:
-    """One of: verified | native | confirmed | denied | unconfirmed.
+    """One of: verified | native | confirmed | denied | renamed | unconfirmed.
 
     An on-disk file always wins, even over a 'denied' decision — a user who
     later installed something they once dismissed shouldn't have to re-confirm.
+    'renamed' means the name has been aliased to a different canonical name;
+    the old name should not appear in the review queue or usage tables.
     """
     if find_skill_or_agent_file(kind, name) is not None:
         return "verified"
@@ -192,6 +211,8 @@ def status_of(kind: str, name: str, confirmations: dict | None = None) -> str:
         return "native"
     conf = confirmations if confirmations is not None else load_confirmations()
     key = f"{kind}::{name}"
+    if key in conf.get("renames", {}):
+        return "renamed"
     if key in conf["denied"]:
         return "denied"
     if key in conf["confirmed"]:
@@ -203,12 +224,18 @@ def status_of(kind: str, name: str, confirmations: dict | None = None) -> str:
 # Aggregation
 
 def aggregate_counts(events_: list[dict], kind: str,
-                     within_days: int | None = None) -> dict[str, dict]:
+                     within_days: int | None = None,
+                     confirmations: dict | None = None) -> dict[str, dict]:
     """Return {name: {'window': int, 'all': int}} for the given event type.
 
     `within_days` controls the 'window' bucket — passing None means all-time
     only (window == all). The original TUI uses a fixed 7-day window; the audit
-    CLI passes 30 (or whatever the user asked for via --days)."""
+    CLI passes 30 (or whatever the user asked for via --days).
+
+    Renamed entries are merged into their canonical name so historical counts
+    from the old name accumulate under the new one."""
+    conf = confirmations if confirmations is not None else load_confirmations()
+    renames: dict[str, str] = conf.get("renames", {})
     cutoff = (datetime.now(timezone.utc) - timedelta(days=within_days)
               if within_days is not None else None)
     counts: dict[str, dict] = {}
@@ -218,7 +245,9 @@ def aggregate_counts(events_: list[dict], kind: str,
         name = e.get("target") or ""
         if not name:
             continue
-        rec = counts.setdefault(name, {"window": 0, "all": 0})
+        # Apply rename: "skill::review-pr" → "pr-review"
+        canonical = renames.get(f"{kind}::{name}", name)
+        rec = counts.setdefault(canonical, {"window": 0, "all": 0})
         rec["all"] += 1
         if cutoff is None or parse_ts(e.get("ts", "")) >= cutoff:
             rec["window"] += 1

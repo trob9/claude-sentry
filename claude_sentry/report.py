@@ -53,8 +53,8 @@ def _classify_skill_agent(events_: list[dict]) -> dict:
     """
     conf = load_confirmations()
     out: dict[str, dict[str, Counter]] = {
-        "skill": {s: Counter() for s in REAL_STATUSES + ("unconfirmed", "denied")},
-        "agent": {s: Counter() for s in REAL_STATUSES + ("unconfirmed", "denied")},
+        "skill": {s: Counter() for s in REAL_STATUSES + ("unconfirmed", "denied", "renamed")},
+        "agent": {s: Counter() for s in REAL_STATUSES + ("unconfirmed", "denied", "renamed")},
     }
     for e in events_:
         kind = e.get("type")
