@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# examples/iterm2/claude-with-sentry
+# Opens Claude + claude-sentry in a single iTerm2 window (vertical split).
+# Auto-links the sentry pane to the session that the claude pane creates,
+# via a SessionStart hook that writes session_id → state file keyed by UUID.
+
+set -e
+
+TMPDIR_BASE="/tmp/claude-with-sentry-$$"
+mkdir -p "$TMPDIR_BASE"
+
+# Generate UUID to link this sentry pane to the Claude session it watches.
+# Hook reads CLAUDE_SENTRY_LINK_ID, writes session_id to:
+#   ~/.claude/state/sentry-links/<UUID>.json
+# claude-sentry polls that file on its 2-second refresh tick.
+SENTRY_LINK_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
+STATE_DIR="$HOME/.claude/state/sentry-links"
+STATE_FILE="$STATE_DIR/$SENTRY_LINK_ID.json"
+mkdir -p "$STATE_DIR"
+
+# Snapshot env vars needed by both panes
+ENV_FILE="$TMPDIR_BASE/env.sh"
+{
+    echo "#!/bin/zsh"
+    echo "export PATH=$HOME/.local/bin:\$PATH"
+    for var in ANTHROPIC_MODEL NVM_DIR HOME \
+               HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy \
+               CLOUDSDK_PROXY_TYPE CLOUDSDK_PROXY_PORT CLOUDSDK_PROXY_ADDRESS \
+               REQUESTS_CA_BUNDLE CURL_CA_BUNDLE SSL_CERT_FILE NODE_EXTRA_CA_CERTS; do
+        val="${!var}"
+        [[ -n "$val" ]] && printf 'export %s=%q\n' "$var" "$val"
+    done
+    printf 'export CLAUDE_SENTRY_LINK_ID=%q\n' "$SENTRY_LINK_ID"
+} > "$ENV_FILE"
+
+# Claude launcher (left pane) — runs claude --verbose directly. SessionStart
+# hook fires at process start, capturing session_id for the sentry pane.
+CLAUDE_LAUNCHER="$TMPDIR_BASE/run-claude.sh"
+{
+    echo "#!/bin/zsh"
+    echo "source '$ENV_FILE'"
+    if [[ $# -eq 0 ]]; then
+        echo "claude --verbose"
+    else
+        printf 'claude %s\n' "$(printf '%q ' "$@")"
+    fi
+    echo "echo '[Claude exited — press Enter to close]'"
+    echo "read"
+    printf "rm -f %q\n" "$STATE_FILE"
+} > "$CLAUDE_LAUNCHER"
+chmod +x "$CLAUDE_LAUNCHER"
+
+# Sentry launcher (right pane): wait for SessionStart hook to write session_id,
+# then attach. Times out after 15s and falls back to --all-sessions.
+SENTRY_LAUNCHER="$TMPDIR_BASE/run-sentry.sh"
+{
+    echo "#!/bin/zsh"
+    echo "source '$ENV_FILE'"
+    cat << SENTRY
+echo "⏳ Waiting for Claude session to start..."
+SESSION_ID=""
+for i in \$(seq 1 30); do
+    if [[ -f "$STATE_FILE" ]]; then
+        SESSION_ID=\$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('session_id',''))" 2>/dev/null)
+        [[ -n "\$SESSION_ID" ]] && break
+    fi
+    sleep 0.5
+done
+if [[ -n "\$SESSION_ID" ]]; then
+    echo "🔗 Linked to session: \$SESSION_ID"
+    ~/.local/bin/claude-sentry --session "\$SESSION_ID"
+else
+    echo "⚠️  Timeout waiting for session — falling back to --all-sessions"
+    ~/.local/bin/claude-sentry --all-sessions
+fi
+echo "[Sentry exited with code \$? — press Enter to close]"
+read
+SENTRY
+} > "$SENTRY_LAUNCHER"
+chmod +x "$SENTRY_LAUNCHER"
+
+# Drive iTerm2 via AppleScript: open a new window, run claude in the left
+# pane, split vertically, run the sentry wrapper in the right pane.
+# Note: iTerm2 AppleScript splits 50/50 by default — drag the divider or
+# use cmd+shift+] / [ to adjust. (No clean way to specify a ratio in AS.)
+osascript <<APPLESCRIPT
+tell application "iTerm"
+    activate
+    create window with default profile
+    tell current window
+        tell current session
+            set name to "Claude Main"
+            write text "exec /bin/zsh ${CLAUDE_LAUNCHER}"
+            -- split vertically returns the new session (the right pane)
+            set sentrySession to (split vertically with default profile)
+        end tell
+        tell sentrySession
+            set name to "Claude Sentry"
+            write text "exec /bin/zsh ${SENTRY_LAUNCHER}"
+        end tell
+    end tell
+end tell
+APPLESCRIPT
+
+# Clean up tmp files after iTerm2 has read the scripts
+sleep 5 && rm -rf "$TMPDIR_BASE" &
+
+echo "✅ iTerm2 window opened with Claude + claude-sentry (link id: $SENTRY_LINK_ID)"

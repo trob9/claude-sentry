@@ -329,7 +329,7 @@ not the OS.
 |---|---|---|
 | **Windows Terminal** | yes | ✅ built-in (`claude-sentry-launch`) |
 | **Kitty** (macOS / Linux) | yes | ✅ via [`examples/kitty/`](examples/kitty/) |
-| **iTerm2** (macOS) | yes | possible — no example shipped yet |
+| **iTerm2** (macOS) | yes | ✅ via [`examples/iterm2/`](examples/iterm2/) |
 | **tmux / zellij / screen** (inside any terminal) | yes | possible — no example shipped yet |
 | **Terminal.app** (macOS), **gnome-terminal** | **no** | use two windows side-by-side, or run `tmux`/`zellij` inside it |
 
