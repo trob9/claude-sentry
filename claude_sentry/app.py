@@ -2031,9 +2031,14 @@ class SentryApp(App):
                 key=f"{kind}::{name}",
             )
 
+        # Update the tab header to show the count. In Textual 8.x the label
+        # lives on the Tab widget (the header), not on TabPane — get it via
+        # TabbedContent.get_tab(pane_id). The Text wrapper is important;
+        # passing a bare string can re-render as plain text and lose styling.
         try:
-            pane = self.query_one("#unconfirmed-tab", TabPane)
-            pane.label = f"Unconfirmed ({len(rows)})"  # type: ignore[assignment]
+            tabbed = self.query_one(TabbedContent)
+            tab = tabbed.get_tab("unconfirmed-tab")
+            tab.label = Text(f"Unconfirmed ({len(rows)})") if rows else Text("Unconfirmed")
         except Exception:
             pass
 
