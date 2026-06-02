@@ -24,7 +24,6 @@ import json
 import os
 import re
 import shutil
-import signal
 import subprocess
 import sys
 import textwrap
@@ -1517,15 +1516,10 @@ class SentryApp(App):
         self._cols_ready = True
         self.refresh_data()
         self.set_interval(2.0, self.refresh_data)
-        # Register PID + SIGUSR1 handler so the claude-with-sentry launcher
-        # can re-link this app on /resume.
+        # Register this process in the launcher's state file. The state file's
+        # session_id is the source of truth — if the hook updated it between
+        # the launcher reading it and us mounting, adopt that newer value.
         self._register_resume_link()
-        # Pick up session_id the SessionStart hook may have already written to
-        # the link file before we mounted. Without this, the initial launch
-        # keeps the placeholder --session arg until /resume fires a SIGUSR1,
-        # and the sidebar shows zero activity because events.jsonl never has
-        # rows with the placeholder session_id.
-        self._reload_link_session()
         # Opened without a session → prompt to link the current Claude chat.
         # (Skipped when we're auto-linked by CLAUDE_SENTRY_LINK_ID — the hook
         # will have written a session_id either before or shortly after mount.)
@@ -1533,9 +1527,11 @@ class SentryApp(App):
             self.call_after_refresh(lambda: self.action_link_session(self.GLOBAL_INTRO))
 
     def _register_resume_link(self) -> None:
-        """Wire up auto-resume re-linking driven by the claude-with-sentry
-        launcher. Writes our PID into the state file so the SessionStart hook
-        can SIGUSR1 us when the linked Claude session changes."""
+        """Mark this app as the live sentry for its CLAUDE_SENTRY_LINK_ID by
+        writing our PID into the state file. The hook also writes session_id
+        there. The 2s refresh tick polls this file (_poll_link_state) to pick
+        up any session change driven by /resume — no signal handler needed,
+        which sidesteps asyncio/threading fragility and stale-PID issues."""
         if not self._link_state_file:
             return
         try:
@@ -1548,22 +1544,14 @@ class SentryApp(App):
                     data = {}
             data["sentry_pid"] = os.getpid()
             self._link_state_file.write_text(json.dumps(data))
+            # Seed with current session_id so the poll only reacts to changes.
+            self._last_polled_sid = (data.get("session_id") or "").strip()
         except Exception:
             return
-        try:
-            signal.signal(signal.SIGUSR1, self._on_link_signal)
-        except (ValueError, OSError):
-            pass
 
-    def _on_link_signal(self, signum, frame) -> None:
-        """SIGUSR1 handler — runs on main thread between bytecode instructions.
-        Schedule the actual re-scope onto Textual's event loop."""
-        try:
-            self.call_from_thread(self._reload_link_session)
-        except Exception:
-            pass
-
-    def _reload_link_session(self) -> None:
+    def _poll_link_state(self) -> None:
+        """Called from refresh_data each tick. If the state file's session_id
+        has changed since we last looked, re-scope and force a refresh."""
         if not self._link_state_file or not self._link_state_file.exists():
             return
         try:
@@ -1571,12 +1559,12 @@ class SentryApp(App):
         except Exception:
             return
         new_sid = (data.get("session_id") or "").strip()
-        if new_sid and new_sid != self.session_id:
+        if not new_sid or new_sid == getattr(self, "_last_polled_sid", ""):
+            return
+        self._last_polled_sid = new_sid
+        if new_sid != self.session_id:
             self.session_id = new_sid
-            try:
-                self.refresh_data(force=True)
-            except Exception:
-                pass
+            # refresh_data is the caller, so it will redraw with the new sid.
     # ---- actions --------------------------------------------------------
 
     def action_grow_focused(self) -> None:
@@ -1780,6 +1768,12 @@ class SentryApp(App):
         self.refresh_data(force=True)
 
     def refresh_data(self, force: bool = False) -> None:
+        # Re-link to the latest session_id if the launcher's state file changed
+        # (driven by /resume in the paired Claude pane). May set self.session_id.
+        prev_sid = self.session_id
+        self._poll_link_state()
+        if self.session_id != prev_sid:
+            force = True  # session changed → bypass the "nothing changed" gate
         evts = self._eventlog.read()  # incremental: only parses new lines
         # Cheap signature so we don't redraw (and flash) when nothing changed.
         sig = (len(evts), evts[-1].get("ts") if evts else "", self.size.width)

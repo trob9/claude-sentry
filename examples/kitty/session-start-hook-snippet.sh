@@ -15,11 +15,10 @@
 #   source /path/to/session-start-hook-snippet.sh
 
 # ── claude-sentry session linking ────────────────────────────────────────────
-# If this session was started by claude-with-sentry, write the session_id to a
-# state file so the sentry pane wrapper can pick it up and launch claude-sentry
-# scoped to this session. On /resume, the state file already exists with a
-# sentry_pid — preserve it and signal SIGUSR1 so the running claude-sentry
-# re-reads session_id and re-scopes its view.
+# If this session was started by a claude-sentry launcher (CLAUDE_SENTRY_LINK_ID
+# set), write the session_id to a state file. The paired claude-sentry app
+# polls this file on its 2-second refresh tick and re-scopes itself when the
+# session_id changes — that's how /resume auto-switches the sidebar.
 if [[ -n "${CLAUDE_SENTRY_LINK_ID:-}" ]]; then
     _SENTRY_SESSION=$(echo "$_HOOK_INPUT" | python3 -c \
         "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null)
@@ -27,8 +26,8 @@ if [[ -n "${CLAUDE_SENTRY_LINK_ID:-}" ]]; then
         mkdir -p ~/.claude/state/sentry-links
         _SENTRY_STATE="$HOME/.claude/state/sentry-links/$CLAUDE_SENTRY_LINK_ID.json"
         if [[ -f "$_SENTRY_STATE" ]]; then
+            # Preserve other fields (e.g. sentry_pid) while updating session_id
             _SENTRY_EXISTING=$(cat "$_SENTRY_STATE")
-            # Preserve sentry_pid while updating session_id
             echo "$_SENTRY_EXISTING" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
@@ -36,12 +35,6 @@ data['session_id'] = '$_SENTRY_SESSION'
 print(json.dumps(data))
 " > "$_SENTRY_STATE" 2>/dev/null || \
                 printf '{"session_id":"%s"}\n' "$_SENTRY_SESSION" > "$_SENTRY_STATE"
-            # Signal the sentry app to reload onto the new session
-            _SENTRY_PID=$(echo "$_SENTRY_EXISTING" | python3 -c \
-                "import sys,json; print(json.load(sys.stdin).get('sentry_pid',''))" 2>/dev/null)
-            if [[ -n "$_SENTRY_PID" ]] && kill -0 "$_SENTRY_PID" 2>/dev/null; then
-                kill -USR1 "$_SENTRY_PID" 2>/dev/null || true
-            fi
         else
             printf '{"session_id":"%s"}\n' "$_SENTRY_SESSION" > "$_SENTRY_STATE"
         fi

@@ -25,9 +25,11 @@ pipx install 'git+https://github.com/trob9/claude-sentry.git' && claude-sentry-i
 - **Unconfirmed** (bottom tab): a review queue. Anything that *looks* like a
   skill or agent but isn't installed on disk and isn't a known Claude built-in —
   a typo, or a brand-new command — lands here instead of cluttering the real
-  lists. Click the green ✓ to confirm it (it moves into Skills/Agents) or the red
-  ✗ to dismiss it for good; or use **✓ Confirm all** / **✗ Deny all** at the top
-  to clear the list in one click. Your decisions are saved permanently.
+  lists. Click the green ✓ to confirm it (it moves into Skills/Agents), the red
+  ✗ to dismiss it for good, or the yellow ↻ to **rename** it (when a skill has
+  changed names and you want past events to roll up under the new canonical
+  name). Use **✓ Confirm all** / **✗ Deny all** at the top to clear the list
+  in one click. Your decisions are saved permanently.
 
 Claude's **built-in** skills and agents (`verify`, `code-review`,
 `general-purpose`, …) are recognised out of the box, shown with a `(native)`
@@ -120,6 +122,7 @@ This puts these commands on your `PATH`:
 | `claude-sentry-report` | print a usage audit of the log (last 30 days by default) | – |
 | `claude-sentry-confirm` | mark an unresolved skill/agent as real (headless ✓) | – |
 | `claude-sentry-deny` | dismiss an unresolved skill/agent (headless ✗) | – |
+| `claude-sentry-rename` | alias an old skill/agent name to its new canonical name (headless ↻) | – |
 
 (Plain `pip install 'git+https://github.com/trob9/claude-sentry.git[tui]'` also
 works if you manage your own environment — just make sure the commands land on
@@ -203,12 +206,17 @@ These need a one-time decision — confirm them so they roll into the real count
 or deny them so they stop showing up:
 
 ```bash
-claude-sentry-confirm --list           # show what's unresolved (no changes)
-claude-sentry-confirm my-skill         # confirm a single name
-claude-sentry-confirm skill::my-skill  # use kind:: prefix if ambiguous
-claude-sentry-confirm --all            # confirm everything pending
-claude-sentry-deny    /tset            # dismiss a typo
+claude-sentry-confirm --list                 # show what's unresolved (no changes)
+claude-sentry-confirm my-skill               # confirm a single name
+claude-sentry-confirm skill::my-skill        # use kind:: prefix if ambiguous
+claude-sentry-confirm --all                  # confirm everything pending
+claude-sentry-deny    /tset                  # dismiss a typo
+claude-sentry-rename  old-name  new-name     # alias old → new (counts merge)
 ```
+
+`rename` validates that `new-name` is installed on disk or is a native built-in
+before saving the alias. Once aliased, every past and future event for
+`old-name` rolls up under `new-name` in both the sidebar and the audit report.
 
 Decisions are saved to `~/.claude/sentry/confirmations.json` — the same file
 the sidebar uses, so if you later install `[tui]` your existing decisions
@@ -312,11 +320,11 @@ break a tool call), so an empty pane usually means one of:
 
 ## Platform notes
 
-| Platform | TUI | Logging hook | Auto-dock sidebar |
+| Terminal | TUI | Logging hook | Auto-dock + auto-link |
 |---|---|---|---|
-| **Windows Terminal** | ✅ | ✅ | ✅ (splits a pane for you) |
-| **macOS** (Terminal/iTerm2) | ✅ | ✅ | ➖ run `claude-sentry` yourself |
-| **Linux** (gnome-terminal, kitty, etc.) | ✅ | ✅ | ➖ run `claude-sentry` yourself |
+| **Windows Terminal** | ✅ | ✅ | ✅ built-in (`claude-sentry-launch`) |
+| **Kitty** (macOS / Linux) | ✅ | ✅ | ✅ via [`examples/kitty/`](examples/kitty/) launcher |
+| **Other** (Terminal.app, iTerm2, gnome-terminal, …) | ✅ | ✅ | ➖ run `claude-sentry` yourself |
 
 Open-with-default and reveal-in-file-manager are wired per OS: `os.startfile` on
 Windows, `open` / `open -R` on macOS, `xdg-open` on Linux. The inventory window
@@ -349,19 +357,23 @@ By default you press `l` to link claude-sentry to a session. If you write a
 small launcher script, claude-sentry can link automatically — and re-link when
 you run `/resume` — without any manual step.
 
-**The contract** — your launcher must do three things:
+**The contract** — your launcher must do two things:
 
 1. **Set `CLAUDE_SENTRY_LINK_ID`** to a fresh UUID and export it to both the
    Claude pane and the claude-sentry pane before either starts.
 2. **On each `SessionStart` hook** (fires when Claude creates or resumes a
    session), write the new `session_id` to
    `~/.claude/state/sentry-links/$CLAUDE_SENTRY_LINK_ID.json`.
-3. **Send `SIGUSR1`** to the `sentry_pid` stored in that same file so the
-   running claude-sentry re-scopes immediately.
 
-claude-sentry handles the rest: on startup it writes its own PID into the state
-file and installs the signal handler. If `CLAUDE_SENTRY_LINK_ID` is not set it
+That's it — no signals, no PID tracking. claude-sentry polls the state file on
+its 2-second refresh tick: when the `session_id` changes (typically after a
+`/resume`), it re-scopes within ~2 s. If `CLAUDE_SENTRY_LINK_ID` is not set it
 falls back to the normal manual-link behaviour.
+
+**Multiple windows are isolated:** each Claude+sentry pair has its own
+`CLAUDE_SENTRY_LINK_ID` and its own state file, so two windows on different
+sessions never cross. Two windows on the *same* session will both show the
+merged tool activity (same `session_id` in the log).
 
 **Reference implementation for Kitty (macOS/Linux):** see
 [`examples/kitty/`](examples/kitty/) for a ready-to-use launcher script and a
