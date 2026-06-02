@@ -343,6 +343,30 @@ Then reload with `ctrl+shift+f5`. Focus the claude-sentry pane and press
 `cmd+alt+right` to widen it (5 columns per press), `cmd+alt+left` to narrow.
 On Linux swap `cmd` for `ctrl`.
 
+### Launcher integration (auto-link + `/resume` support)
+
+By default you press `l` to link claude-sentry to a session. If you write a
+small launcher script, claude-sentry can link automatically — and re-link when
+you run `/resume` — without any manual step.
+
+**The contract** — your launcher must do three things:
+
+1. **Set `CLAUDE_SENTRY_LINK_ID`** to a fresh UUID and export it to both the
+   Claude pane and the claude-sentry pane before either starts.
+2. **On each `SessionStart` hook** (fires when Claude creates or resumes a
+   session), write the new `session_id` to
+   `~/.claude/state/sentry-links/$CLAUDE_SENTRY_LINK_ID.json`.
+3. **Send `SIGUSR1`** to the `sentry_pid` stored in that same file so the
+   running claude-sentry re-scopes immediately.
+
+claude-sentry handles the rest: on startup it writes its own PID into the state
+file and installs the signal handler. If `CLAUDE_SENTRY_LINK_ID` is not set it
+falls back to the normal manual-link behaviour.
+
+**Reference implementation for Kitty (macOS/Linux):** see
+[`examples/kitty/`](examples/kitty/) for a ready-to-use launcher script and a
+SessionStart hook snippet you can paste into your existing hook file.
+
 ---
 
 ## Development

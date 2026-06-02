@@ -24,6 +24,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import textwrap
@@ -1303,6 +1304,15 @@ class SentryApp(App):
         self._path_mode = mode if mode in PATH_MODES else "full"
         self._cols_ready = False  # set once on_mount has added columns
         self._eventlog = EventLog()  # incremental reader for the 2s refresh
+        # Auto-resume support via claude-with-sentry launcher. The launcher
+        # generates CLAUDE_SENTRY_LINK_ID, the SessionStart hook writes
+        # session_id to a state file keyed by that UUID, and on SIGUSR1 we
+        # re-read the file and re-scope this app.
+        self._link_id = os.environ.get("CLAUDE_SENTRY_LINK_ID", "")
+        self._link_state_file = (
+            Path.home() / ".claude" / "state" / "sentry-links" / f"{self._link_id}.json"
+            if self._link_id else None
+        )
 
     def set_path_mode(self, mode: str) -> None:
         if mode not in PATH_MODES:
@@ -1348,8 +1358,9 @@ class SentryApp(App):
         yield WrappingFooter()
         # Sidebar-width resize is a terminal feature: Windows Terminal has a key
         # binding; other terminals (iTerm2 etc.) resize by dragging the pane edge.
+        # Hint text for the resize keybinding — varies by platform.
         resize = ("alt+shift+←→: widen / narrow" if IS_WIN
-                  else "drag the pane edge: widen / narrow")
+                  else "cmd+alt+←→: widen / narrow")
         yield Static(
             "left-click: select    right-click: options\n" + resize,
             id="hint",
@@ -1395,10 +1406,66 @@ class SentryApp(App):
         self._cols_ready = True
         self.refresh_data()
         self.set_interval(2.0, self.refresh_data)
+        # Register PID + SIGUSR1 handler so the claude-with-sentry launcher
+        # can re-link this app on /resume.
+        self._register_resume_link()
+        # Pick up session_id the SessionStart hook may have already written to
+        # the link file before we mounted. Without this, the initial launch
+        # keeps the placeholder --session arg until /resume fires a SIGUSR1,
+        # and the sidebar shows zero activity because events.jsonl never has
+        # rows with the placeholder session_id.
+        self._reload_link_session()
         # Opened without a session → prompt to link the current Claude chat.
-        if not self.session_id:
+        # (Skipped when we're auto-linked by CLAUDE_SENTRY_LINK_ID — the hook
+        # will have written a session_id either before or shortly after mount.)
+        if not self.session_id and not self._link_id:
             self.call_after_refresh(lambda: self.action_link_session(self.GLOBAL_INTRO))
 
+    def _register_resume_link(self) -> None:
+        """Wire up auto-resume re-linking driven by the claude-with-sentry
+        launcher. Writes our PID into the state file so the SessionStart hook
+        can SIGUSR1 us when the linked Claude session changes."""
+        if not self._link_state_file:
+            return
+        try:
+            self._link_state_file.parent.mkdir(parents=True, exist_ok=True)
+            data: dict = {}
+            if self._link_state_file.exists():
+                try:
+                    data = json.loads(self._link_state_file.read_text())
+                except Exception:
+                    data = {}
+            data["sentry_pid"] = os.getpid()
+            self._link_state_file.write_text(json.dumps(data))
+        except Exception:
+            return
+        try:
+            signal.signal(signal.SIGUSR1, self._on_link_signal)
+        except (ValueError, OSError):
+            pass
+
+    def _on_link_signal(self, signum, frame) -> None:
+        """SIGUSR1 handler — runs on main thread between bytecode instructions.
+        Schedule the actual re-scope onto Textual's event loop."""
+        try:
+            self.call_from_thread(self._reload_link_session)
+        except Exception:
+            pass
+
+    def _reload_link_session(self) -> None:
+        if not self._link_state_file or not self._link_state_file.exists():
+            return
+        try:
+            data = json.loads(self._link_state_file.read_text())
+        except Exception:
+            return
+        new_sid = (data.get("session_id") or "").strip()
+        if new_sid and new_sid != self.session_id:
+            self.session_id = new_sid
+            try:
+                self.refresh_data(force=True)
+            except Exception:
+                pass
     # ---- actions --------------------------------------------------------
 
     def action_grow_focused(self) -> None:
