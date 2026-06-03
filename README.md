@@ -76,13 +76,14 @@ search. Nothing to query, nothing to scroll.
 
 ## What it needs to work
 
-claude-sentry has two moving parts:
+claude-sentry has two parts:
 
-1. **The TUI** — a Python/[Textual](https://textual.textualize.io/) app you run
-   in a terminal. This part works on Windows, macOS, and Linux.
+1. **The TUI** *(optional)* — a Python/[Textual](https://textual.textualize.io/)
+   app you run in a terminal. Works on Windows, macOS, and Linux. Skip it if
+   you only want the audit CLIs — see [Lightweight install](#lightweight-install-audit-only).
 2. **Hooks** — small commands Claude Code runs automatically on each tool call.
-   They write one line per event to a log file the TUI reads. Without the hooks,
-   the TUI runs but shows nothing, because nothing is feeding it data.
+   They write one line per event to a log file. The TUI reads this file live;
+   the audit CLIs read it on demand. Without the hooks, nothing is fed any data.
 
 > **Why hooks?** Claude Code can't push live data into another window on its own.
 > But it can run a command after every tool it uses (a "hook"). We register a
